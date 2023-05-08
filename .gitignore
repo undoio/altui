@@ -1,0 +1,12 @@
+.DS_Store
+*~
+*.sw[po]
+.mypy_cache
+__pycache__
+tags
+tags.lock
+tags.temp
+cscope.out
+cscope.out.files
+cscope.out.lock
+ncscope.out.temp
