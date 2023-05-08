@@ -191,7 +191,7 @@ class UdbApp(gdbapp.GdbCompatibleApp):
             func_name = frame.get("func", "???")
             bt_lv.append(widgets.ListItem(widgets.Label(f"{func_name}({arg_list})")))
             if i == stack_selected_frame_index:
-                source_path = _to_type_or_none(Path, frame.get("file"))
+                source_path = _to_type_or_none(Path, frame.get("fullname"))
                 source_line = _to_type_or_none(int, frame.get("line"))
                 for arg in formatted_args:
                     vars_lv.append(widgets.ListItem(widgets.Label(arg)))
