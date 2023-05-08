@@ -27,7 +27,10 @@ def _to_type_or_none(type_: Callable[..., _T], value: Any) -> _T | None:
 
 
 class UdbApp(gdbapp.GdbCompatibleApp):
-    BINDINGS = [("ctrl+w", "toggle_dark", "Toggle Dark Mode")]
+    BINDINGS = [
+        ("ctrl+w", "toggle_dark", "Toggle dark mode"),
+        ("ctrl+x", "expand", "Test terminal expansion"),
+    ]
 
     DEFAULT_CSS = """
     # https://github.com/Textualize/textual/issues/2411
@@ -289,3 +292,12 @@ class UdbApp(gdbapp.GdbCompatibleApp):
     def progress_update(self, total: int) -> None:
         progress_indicator = self.query_one("#progress_indicator", widgets.ProgressBar)
         progress_indicator.update(progress=total)
+
+    def _action_expand(self) -> None:
+        term = self.query_one("#terminal", terminal.Terminal)
+        code = self.query_one("#code", source_view.SourceView)
+
+        if term.styles.min_height is None:
+            term.styles.min_height = term.outer_size.height + code.outer_size.height - 5
+        else:
+            term.styles.min_height = None
