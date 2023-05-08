@@ -59,6 +59,15 @@ class UdbApp(gdbapp.GdbCompatibleApp):
         overflow-x: auto;
         overflow-y: scroll;
     }
+
+    Horizontal#progress_panel {
+        display: none;
+        layer: progress_indicator;
+        dock: top;
+        padding: 0 1;
+        border: tall $secondary;
+        background: $panel;
+    }
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -94,6 +103,9 @@ class UdbApp(gdbapp.GdbCompatibleApp):
                         )
 
         yield widgets.Footer()
+
+        with containers.Horizontal(id="progress_panel"):
+            yield widgets.ProgressBar(id="progress_indicator", total=100, show_eta=False)
 
     def on_ready(self) -> None:
         term = self.query_one("#terminal", terminal.Terminal)
@@ -219,3 +231,28 @@ class UdbApp(gdbapp.GdbCompatibleApp):
             self._before_prompt()
 
         gdb.post_event(set_frame)
+
+    def progress_show(self) -> None:
+        term = self.query_one("#terminal", terminal.Terminal)
+        progress_panel = self.query_one("#progress_panel", containers.Horizontal)
+        progress_indicator = self.query_one("#progress_indicator", widgets.ProgressBar)
+
+        progress_panel.styles.display = "block"
+        progress_panel.styles.width = w = progress_indicator.virtual_region_with_margin.width + 4
+        progress_panel.styles.height = progress_indicator.virtual_region_with_margin.height + 2
+
+        progress_panel.styles.margin = (
+            term.content_region.y,
+            0,
+            0,
+            term.content_region.x + term.outer_size.width - w - 4,
+        )
+        self.progress_update(0)
+
+    def progress_hide(self) -> None:
+        progress_panel = self.query_one("#progress_panel", containers.Horizontal)
+        progress_panel.styles.display = "none"
+
+    def progress_update(self, total: int) -> None:
+        progress_indicator = self.query_one("#progress_indicator", widgets.ProgressBar)
+        progress_indicator.update(progress=total)
