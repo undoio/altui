@@ -5,12 +5,12 @@ from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 import gdb  # type: ignore[import]
+from src.udbpy import engine  # type: ignore[import]
 from src.udbpy.gdb_extensions import gdbutils, udb_base  # type: ignore[import]
 from textual import containers, on, widgets
 from textual.app import ComposeResult
 
-from . import gdbapp, mi, source_view, terminal
-
+from . import gdbapp, mi, source_view, status_bar, terminal
 
 _T = TypeVar("_T")
 
@@ -102,7 +102,7 @@ class UdbApp(gdbapp.GdbCompatibleApp):
                             id="registers", classes="main-window-panel disable-on-execution"
                         )
 
-        yield widgets.Footer()
+        yield status_bar.StatusBar()
 
         with containers.Horizontal(id="progress_panel"):
             yield widgets.ProgressBar(id="progress_indicator", total=100, show_eta=False)
@@ -170,12 +170,26 @@ class UdbApp(gdbapp.GdbCompatibleApp):
 
         local_vars = mi.execute("-stack-list-locals 1").get("locals", [])
 
+        selected_inferior = self._udb.inferiors.selected
+        if selected_inferior.recording is not None:
+            target_name = selected_inferior.recording.name
+        else:
+            filename = selected_inferior.gdb_inferior.progspace.filename
+            if filename is None:
+                target_name = ""
+            else:
+                target_name = Path(filename).name
+
         self.app.call_from_thread(
             self._update_ui,
             stack=stack,
             stack_arguments=stack_arguments,
             stack_selected_frame_index=stack_selected_frame_index,
             local_vars=local_vars,
+            execution_mode=self._udb.get_execution_mode(),
+            time=self._udb.time.get(),
+            time_extent=self._udb.get_event_log_extent(),
+            target_name=target_name,
         )
 
     def _update_ui(
@@ -184,6 +198,10 @@ class UdbApp(gdbapp.GdbCompatibleApp):
         stack_arguments: list[dict[str, Any]],
         stack_selected_frame_index: int | None,
         local_vars: list[dict[str, Any]],
+        execution_mode: engine.ExecutionMode,
+        time: engine.Time,
+        time_extent: engine.LogExtent,
+        target_name: str,
     ) -> None:
         def format_var(d: dict[str, Any]) -> str:
             name = d.get("name", "???")
@@ -217,6 +235,15 @@ class UdbApp(gdbapp.GdbCompatibleApp):
         for var in local_vars:
             vars_lv.append(widgets.ListItem(widgets.Label(format_var(var))))
         vars_lv.index = None
+
+        status = self.query_one(status_bar.StatusBar)
+        status.update(
+            execution_mode=execution_mode,
+            target_name=target_name,
+            time=time,
+            time_extent=time_extent,
+            source_path=source_path,
+        )
 
     @on(widgets.ListView.Selected)  # FIXME: "#backtrace"
     def _backtrace_selected(self, event: widgets.ListView.Selected) -> None:
