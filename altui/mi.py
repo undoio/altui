@@ -36,7 +36,10 @@ def parse_response(text: str) -> dict[str, Any]:
         except KeyError as exc:
             raise MIInvalidResponse(f"Missing record payload: {line!r}") from exc
         if message == "error":
-            raise MIErrorResponse(payload.get("msg", "Unknown error."))
+            msg = payload.get("msg", "Unknown error.")
+            if msg == "No registers.":
+                raise comms.NotRunningError()
+            raise MIErrorResponse(msg)
         if payload is not None and result is not None:
             raise MIInvalidResponse(
                 f"Multiple responses found:\nFirst: {result!r}\nSecond: {payload!r}"
@@ -48,9 +51,10 @@ def parse_response(text: str) -> dict[str, Any]:
 
 def execute(command: str) -> dict[str, Any]:
     try:
-        text = gdbutils.execute_to_string(
-            f"interpreter-exec mi3 {textutil.gdb_command_arg_escape(command)}"
+        return parse_response(
+            gdbutils.execute_to_string(
+                f"interpreter-exec mi3 {textutil.gdb_command_arg_escape(command)}"
+            )
         )
-    except comms.NotRunningError:
+    except comms.WrongExecutionModeError:
         return {}
-    return parse_response(text)

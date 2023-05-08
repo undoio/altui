@@ -1,3 +1,4 @@
+import contextlib
 import functools
 import os
 import threading
@@ -5,7 +6,7 @@ from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 import gdb  # type: ignore[import]
-from src.udbpy import engine  # type: ignore[import]
+from src.udbpy import comms, engine  # type: ignore[import]
 from src.udbpy.gdb_extensions import gdbutils, udb_base  # type: ignore[import]
 from textual import containers, on, widgets
 from textual.app import ComposeResult
@@ -170,15 +171,20 @@ class UdbApp(gdbapp.GdbCompatibleApp):
 
         local_vars = mi.execute("-stack-list-locals 1").get("locals", [])
 
-        selected_inferior = self._udb.inferiors.selected
-        if selected_inferior.recording is not None:
-            target_name = selected_inferior.recording.name
-        else:
-            filename = selected_inferior.gdb_inferior.progspace.filename
-            if filename is None:
-                target_name = ""
+        target_name = None
+        time = None
+        time_extent = None
+        with contextlib.suppress(comms.WrongExecutionModeError):
+            time = self._udb.time.get()
+            time_extent = self._udb.get_event_log_extent()
+
+            selected_inferior = self._udb.inferiors.selected
+            if selected_inferior.recording is not None:
+                target_name = selected_inferior.recording.name
             else:
-                target_name = Path(filename).name
+                filename = selected_inferior.gdb_inferior.progspace.filename
+                if filename is not None:
+                    target_name = Path(filename).name
 
         self.app.call_from_thread(
             self._update_ui,
@@ -187,8 +193,8 @@ class UdbApp(gdbapp.GdbCompatibleApp):
             stack_selected_frame_index=stack_selected_frame_index,
             local_vars=local_vars,
             execution_mode=self._udb.get_execution_mode(),
-            time=self._udb.time.get(),
-            time_extent=self._udb.get_event_log_extent(),
+            time=time,
+            time_extent=time_extent,
             target_name=target_name,
         )
 
