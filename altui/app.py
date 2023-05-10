@@ -121,15 +121,15 @@ class UdbApp(gdbapp.GdbCompatibleApp):
         )
 
         def change_widgets_enablement_gdb_thread(enabled: bool, event: gdb.ThreadEvent) -> None:
-            self.app.call_from_thread(self._change_widgets_enablement, enabled)
+            self.call_from_thread(self._change_widgets_enablement, enabled)
 
-        def connect_events():
-            gdb.events.before_prompt.connect(self._before_prompt)
-
-            gdb.events.cont.connect(functools.partial(change_widgets_enablement_gdb_thread, False))
-            gdb.events.stop.connect(functools.partial(change_widgets_enablement_gdb_thread, True))
-
-        gdb.post_event(connect_events)
+        self.connect_event_thread_safe(gdb.events.before_prompt, self._before_prompt)
+        self.connect_event_thread_safe(
+            gdb.events.cont, functools.partial(change_widgets_enablement_gdb_thread, False)
+        )
+        self.connect_event_thread_safe(
+            gdb.events.stop, functools.partial(change_widgets_enablement_gdb_thread, True)
+        )
 
     @classmethod
     def process_output(cls, buff: bytes) -> bool:
@@ -158,9 +158,12 @@ class UdbApp(gdbapp.GdbCompatibleApp):
     def _before_prompt(self) -> None:
         # Doing MI commands from this event leads to a GDB crash.
         # Investigate whether this happens in newer versions of GDB>
-        gdb.post_event(self._before_prompt_real)
+        self.on_gdb_thread(self._before_prompt_real)
 
     def _before_prompt_real(self) -> None:
+        if self.get_instance() is not self:
+            return
+
         assert threading.current_thread() is threading.main_thread()
 
         # FIXME: only requests a few frames initially as this could take a while.
@@ -189,7 +192,7 @@ class UdbApp(gdbapp.GdbCompatibleApp):
                 if filename is not None:
                     target_name = Path(filename).name
 
-        self.app.call_from_thread(
+        self.call_from_thread(
             self._update_ui,
             stack=stack,
             stack_arguments=stack_arguments,
@@ -266,7 +269,7 @@ class UdbApp(gdbapp.GdbCompatibleApp):
             gdbutils.execute_to_string(f"frame {index}")
             self._before_prompt()
 
-        gdb.post_event(set_frame)
+        self.on_gdb_thread(set_frame)
 
     def progress_show(self) -> None:
         term = self.query_one("#terminal", terminal.Terminal)

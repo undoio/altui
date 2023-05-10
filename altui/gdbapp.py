@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import threading
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 import gdb  # type: ignore
 from textual.app import App
@@ -95,7 +96,6 @@ class GdbCompatibleApp(App):
         *args,
         **kwargs,
     ) -> None:
-
         self.configuration = configuration
         self._thread = thread
         self._init_barrier = init_barrier
@@ -104,6 +104,14 @@ class GdbCompatibleApp(App):
 
         self._init_exit_stack = contextlib.ExitStack()
         self._init_exit_stack.enter_context(self.configuration.real_tty_streams_as_sys_std())
+
+        self._connected_gdb_events: list[tuple[gdb.EventRegistry, Callable[..., None]]] = []
+        # We should connect to gdb.events.gdb_exiting but it doesn't exist in the current version
+        # of bundled GDB.
+        # self._connect_event_thread_safe(
+        #     gdb.events.gdb_exiting,
+        #     lambda event: self._disconnect_events_now,
+        # )
 
         super().__init__(*args, **kwargs)
 
@@ -129,10 +137,48 @@ class GdbCompatibleApp(App):
         with exit_stack:
             self._assert_in_ui_thread()
 
+            self._disconnect_events_thread_safe()
+
             self._init_exit_stack.close()
             self._set_instance(None)
             with self.configuration.real_tty_streams_as_sys_std():  # FIXME: Needed?
                 super().exit(*args, **kwargs)
+
+    def on_gdb_thread(self, callback: Callable, *args: Any, **kwargs: Any) -> None:
+        if not threading.main_thread().is_alive():
+            # This avoids crashes if the main thread already exited. We could avoid the same by
+            # disconnecting on gdb_exiting but that's not supported by our current bundled GDB.
+            return
+
+        if args or kwargs:
+            callback = functools.partial(callback, *args, **kwargs)
+
+        gdb.post_event(callback)
+
+    def connect_event_thread_safe(
+        self,
+        registry: gdb.EventRegistry,
+        callback: Callable[..., None],
+    ) -> None:
+        def wrapper(*args, **kwargs) -> None:
+            if self.get_instance() is self:
+                callback(*args, **kwargs)
+
+        def real_connect():
+            registry.connect(wrapper)
+            self._connected_gdb_events.append((registry, wrapper))
+
+        self.on_gdb_thread(real_connect)
+
+    def _disconnect_events_now(self) -> None:
+        assert threading.current_thread() is threading.main_thread()
+
+        for registry, callback in self._connected_gdb_events:
+            registry.disconnect(callback)
+        self._connected_gdb_events.clear()
+
+    def _disconnect_events_thread_safe(self) -> None:
+        self.on_gdb_thread(self._disconnect_events_now)
 
     @classmethod
     def process_output(cls, buff: bytes) -> bool:
