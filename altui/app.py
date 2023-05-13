@@ -256,13 +256,9 @@ class UdbApp(gdbapp.GdbCompatibleApp):
             source_path=source_path,
         )
 
-    @on(widgets.ListView.Selected)  # FIXME: "#backtrace"
+    @on(widgets.ListView.Selected,"#backtrace")
     def _backtrace_selected(self, event: widgets.ListView.Selected) -> None:
-        list_view = event.list_view
-        if list_view.id != "backtrace":  # FIXME
-            return
-
-        index = list_view.index
+        index = event.list_view.index
 
         def set_frame():
             gdbutils.execute_to_string(f"frame {index}")
