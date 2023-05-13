@@ -131,6 +131,10 @@ class UdbApp(gdbapp.GdbCompatibleApp):
             gdb.events.stop, functools.partial(change_widgets_enablement_gdb_thread, True)
         )
 
+        # Note that this can cause GDB to crash, for instance if you pass `-ex "altui enable" -ex
+        # start` to UDB.
+        self._update_ui()
+
     @classmethod
     def process_output(cls, buff: bytes) -> bool:
         with cls.locked_get_instance() as instance:
