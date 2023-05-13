@@ -3,13 +3,15 @@ from __future__ import annotations
 import contextlib
 import functools
 import threading
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, TypeVar
 
 import gdb  # type: ignore
 from textual.app import App
 from typing_extensions import Self
 
 from . import gdbsupport, ioutil
+
+_T = TypeVar("_T")
 
 _app_instance: GdbCompatibleApp | None = None
 
@@ -85,7 +87,7 @@ class GdbCompatibleApp(App):
         with cls.locked_get_instance() as instance:
             if instance is None:
                 raise gdb.GdbError("Not enabled.")
-            instance.call_from_thread(instance.exit, _use_locked_get_instance=False)
+            instance.on_ui_thread_wait(instance.exit, _use_locked_get_instance=False)
             assert cls.get_instance() is None
 
     def __init__(
@@ -143,6 +145,12 @@ class GdbCompatibleApp(App):
             self._set_instance(None)
             with self.configuration.real_tty_streams_as_sys_std():  # FIXME: Needed?
                 super().exit(*args, **kwargs)
+
+    def on_ui_thread(self, callback: Callable, *args: Any, **kwargs: Any) -> None:
+        self.call_next(callback, *args, **kwargs)
+
+    def on_ui_thread_wait(self, callback: Callable[..., _T], *args: Any, **kwargs: Any) -> _T:
+        return self.call_from_thread(callback, *args, **kwargs)
 
     def on_gdb_thread(self, callback: Callable, *args: Any, **kwargs: Any) -> None:
         if not threading.main_thread().is_alive():

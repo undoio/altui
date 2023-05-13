@@ -120,7 +120,7 @@ class UdbApp(gdbapp.GdbCompatibleApp):
         )
 
         def change_widgets_enablement_gdb_thread(enabled: bool, event: gdb.ThreadEvent) -> None:
-            self.call_from_thread(self._change_widgets_enablement, enabled)
+            self.on_ui_thread(self._change_widgets_enablement, enabled)
 
         self.connect_event_thread_safe(gdb.events.before_prompt, self._update_ui)
         self.connect_event_thread_safe(gdb.events.cont, change_widgets_enablement_gdb_thread, False)
@@ -139,7 +139,7 @@ class UdbApp(gdbapp.GdbCompatibleApp):
 
             # Pylint doesn't know that instance is an instance of this class.
             # pylint: disable=protected-access
-            instance.call_from_thread(instance._process_output_internal, buff)
+            instance.on_ui_thread(instance._process_output_internal, buff)
             return True
 
     def _process_output_internal(self, buff: bytes) -> None:
@@ -191,7 +191,7 @@ class UdbApp(gdbapp.GdbCompatibleApp):
                 if filename is not None:
                     target_name = Path(filename).name
 
-        self.call_from_thread(
+        self.on_ui_thread(
             self._set_ui_to_values,
             stack=stack,
             stack_arguments=stack_arguments,

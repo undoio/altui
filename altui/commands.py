@@ -46,8 +46,8 @@ class _FakeProgress(gdb.Command):
 
         # pylint: disable=protected-access
         try:
-            instance.call_from_thread(instance._change_widgets_enablement, False)
-            instance.call_from_thread(instance.progress_show)
+            instance.on_ui_thread_wait(instance._change_widgets_enablement, False)
+            instance.on_ui_thread(instance.progress_show)
 
             progress = 0
             while True:
@@ -56,14 +56,14 @@ class _FakeProgress(gdb.Command):
                     progress + random.choice([1, 3, 7, 11, 15]),
                     100,
                 )
-                instance.call_from_thread(instance.progress_update, progress)
+                instance.on_ui_thread(instance.progress_update, progress)
                 if progress == 100:
                     break
 
             time.sleep(0.3)
         finally:
-            instance.call_from_thread(instance.progress_hide)
-            instance.call_from_thread(instance._change_widgets_enablement, True)
+            instance.on_ui_thread(instance.progress_hide)
+            instance.on_ui_thread(instance._change_widgets_enablement, True)
 
 
 def register(configuration: gdbsupport.Configuration | None, err_msg: str | None) -> None:
