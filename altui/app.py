@@ -1,5 +1,4 @@
 import contextlib
-import functools
 import os
 import threading
 from pathlib import Path
@@ -124,12 +123,8 @@ class UdbApp(gdbapp.GdbCompatibleApp):
             self.call_from_thread(self._change_widgets_enablement, enabled)
 
         self.connect_event_thread_safe(gdb.events.before_prompt, self._update_ui)
-        self.connect_event_thread_safe(
-            gdb.events.cont, functools.partial(change_widgets_enablement_gdb_thread, False)
-        )
-        self.connect_event_thread_safe(
-            gdb.events.stop, functools.partial(change_widgets_enablement_gdb_thread, True)
-        )
+        self.connect_event_thread_safe(gdb.events.cont, change_widgets_enablement_gdb_thread, False)
+        self.connect_event_thread_safe(gdb.events.stop, change_widgets_enablement_gdb_thread, True)
 
         # Note that this can cause GDB to crash, for instance if you pass `-ex "altui enable" -ex
         # start` to UDB.

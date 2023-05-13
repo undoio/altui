@@ -159,10 +159,17 @@ class GdbCompatibleApp(App):
         self,
         registry: gdb.EventRegistry,
         callback: Callable[..., None],
+        *predefined_args,
+        **predefined_kwargs,
     ) -> None:
-        def wrapper(*args, **kwargs) -> None:
+        def wrapper(*runtime_args, **runtime_kwargs) -> None:
             if self.get_instance() is self:
-                callback(*args, **kwargs)
+                callback(
+                    *predefined_args,
+                    *runtime_args,
+                    **predefined_kwargs,
+                    **runtime_kwargs,
+                )
 
         def real_connect():
             registry.connect(wrapper)
