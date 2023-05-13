@@ -123,7 +123,7 @@ class UdbApp(gdbapp.GdbCompatibleApp):
         def change_widgets_enablement_gdb_thread(enabled: bool, event: gdb.ThreadEvent) -> None:
             self.call_from_thread(self._change_widgets_enablement, enabled)
 
-        self.connect_event_thread_safe(gdb.events.before_prompt, self._before_prompt)
+        self.connect_event_thread_safe(gdb.events.before_prompt, self._update_ui)
         self.connect_event_thread_safe(
             gdb.events.cont, functools.partial(change_widgets_enablement_gdb_thread, False)
         )
@@ -155,12 +155,12 @@ class UdbApp(gdbapp.GdbCompatibleApp):
         for widget in self.query(".disable-on-execution"):  # pylint: disable=not-an-iterable
             widget.disabled = not enabled
 
-    def _before_prompt(self) -> None:
+    def _update_ui(self) -> None:
         # Doing MI commands from this event leads to a GDB crash.
         # Investigate whether this happens in newer versions of GDB>
-        self.on_gdb_thread(self._before_prompt_real)
+        self.on_gdb_thread(self._update_ui_callback)
 
-    def _before_prompt_real(self) -> None:
+    def _update_ui_callback(self) -> None:
         if self.get_instance() is not self:
             return
 
@@ -193,7 +193,7 @@ class UdbApp(gdbapp.GdbCompatibleApp):
                     target_name = Path(filename).name
 
         self.call_from_thread(
-            self._update_ui,
+            self._set_ui_to_values,
             stack=stack,
             stack_arguments=stack_arguments,
             stack_selected_frame_index=stack_selected_frame_index,
@@ -204,7 +204,7 @@ class UdbApp(gdbapp.GdbCompatibleApp):
             target_name=target_name,
         )
 
-    def _update_ui(
+    def _set_ui_to_values(
         self,
         stack: list[dict[str, Any]],
         stack_arguments: list[dict[str, Any]],
@@ -267,7 +267,7 @@ class UdbApp(gdbapp.GdbCompatibleApp):
 
         def set_frame():
             gdbutils.execute_to_string(f"frame {index}")
-            self._before_prompt()
+            self._update_ui()
 
         self.on_gdb_thread(set_frame)
 
