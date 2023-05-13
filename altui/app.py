@@ -10,7 +10,7 @@ from src.udbpy.gdb_extensions import gdbutils, udb_base  # type: ignore[import]
 from textual import containers, on, widgets
 from textual.app import ComposeResult
 
-from . import gdbapp, mi, source_view, status_bar, terminal
+from . import gdbapp, mi, status_bar, terminal, udbwidgets
 
 _T = TypeVar("_T")
 
@@ -81,7 +81,7 @@ class UdbApp(gdbapp.GdbCompatibleApp):
     def compose(self) -> ComposeResult:
         with containers.Horizontal(id="columns"):
             with containers.Vertical(id="column-central"):
-                yield source_view.SourceView(id="code", classes="main-window-panel")
+                yield udbwidgets.SourceView(id="code", classes="main-window-panel")
                 yield terminal.Terminal(id="terminal", classes="main-window-panel")
 
             with containers.Vertical(id="column-right"):
@@ -239,7 +239,7 @@ class UdbApp(gdbapp.GdbCompatibleApp):
 
         bt_lv.index = stack_selected_frame_index
 
-        code = self.query_one("#code", source_view.SourceView)
+        code = self.query_one("#code", udbwidgets.SourceView)
         code.path = Path(source_path) if source_path is not None else None
         code.current_line = source_line
 
@@ -297,7 +297,7 @@ class UdbApp(gdbapp.GdbCompatibleApp):
 
     def _action_expand(self) -> None:
         term = self.query_one("#terminal", terminal.Terminal)
-        code = self.query_one("#code", source_view.SourceView)
+        code = self.query_one("#code", udbwidgets.SourceView)
 
         if term.styles.min_height is None:
             term.styles.min_height = term.outer_size.height + code.outer_size.height - 5
