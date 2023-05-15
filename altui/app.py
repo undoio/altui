@@ -248,7 +248,8 @@ class UdbApp(gdbapp.GdbCompatibleApp):
         code.current_line = source_line
 
         for var in local_vars:
-            vars_lv.append(format_var(var))
+            if var.get("name") != "__PRETTY_FUNCTION__":
+                vars_lv.append(format_var(var))
 
         status = self.query_one(status_bar.StatusBar)
         status.update(
