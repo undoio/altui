@@ -87,21 +87,21 @@ class UdbApp(gdbapp.GdbCompatibleApp):
             with containers.Vertical(id="column-right"):
                 with containers.Vertical(), widgets.TabbedContent():
                     with widgets.TabPane("Backtrace", id="backtrace-tab-pane"):
-                        yield widgets.ListView(
+                        yield udbwidgets.UdbListView(
                             id="backtrace", classes="main-window-panel disable-on-execution"
                         )
                     with widgets.TabPane("Threads", id="threads-tab-pane"):
-                        yield widgets.ListView(
+                        yield udbwidgets.UdbListView(
                             id="threads", classes="main-window-panel disable-on-execution"
                         )
 
                 with containers.Vertical(), widgets.TabbedContent():
                     with widgets.TabPane("Variables", id="variables-tab-pane"):
-                        yield widgets.ListView(
+                        yield udbwidgets.UdbListView(
                             id="variables", classes="main-window-panel disable-on-execution"
                         )
                     with widgets.TabPane("Registers", id="registers-tab-pane"):
-                        yield widgets.ListView(
+                        yield udbwidgets.UdbListView(
                             id="registers", classes="main-window-panel disable-on-execution"
                         )
 
@@ -219,33 +219,36 @@ class UdbApp(gdbapp.GdbCompatibleApp):
             value = d.get("value", "...")
             return f"{name} = {value}"
 
-        vars_lv = self.query_one("#variables", widgets.ListView)
+        vars_lv = self.query_one("#variables", udbwidgets.UdbListView)
         vars_lv.clear()
 
         source_path = None
         source_line = None
-        bt_lv = self.query_one("#backtrace", widgets.ListView)
+        bt_lv: udbwidgets.UdbListView[int] = self.query_one("#backtrace", udbwidgets.UdbListView)
         bt_lv.clear()
         for i, (frame, frame_args) in enumerate(zip(stack, stack_arguments)):
             formatted_args = [format_var(arg) for arg in frame_args.get("args", [])]
             arg_list = ", ".join(formatted_args)
             func_name = frame.get("func", "???")
-            bt_lv.append(widgets.ListItem(widgets.Label(f"{func_name}({arg_list})")))
+            bt_lv.append(
+                f"{func_name}({arg_list})",
+                f'{frame.get("file", "???")}, line {frame.get("line", "???")}',
+                extra=i,
+            )
             if i == stack_selected_frame_index:
                 source_path = _to_type_or_none(Path, frame.get("fullname"))
                 source_line = _to_type_or_none(int, frame.get("line"))
                 for arg in formatted_args:
-                    vars_lv.append(widgets.ListItem(widgets.Label(arg)))
+                    vars_lv.append(arg)
 
-        bt_lv.index = stack_selected_frame_index
+        bt_lv.move_cursor(row=stack_selected_frame_index)
 
         code = self.query_one("#code", udbwidgets.SourceView)
         code.path = Path(source_path) if source_path is not None else None
         code.current_line = source_line
 
         for var in local_vars:
-            vars_lv.append(widgets.ListItem(widgets.Label(format_var(var))))
-        vars_lv.index = None
+            vars_lv.append(format_var(var))
 
         status = self.query_one(status_bar.StatusBar)
         status.update(
@@ -256,12 +259,12 @@ class UdbApp(gdbapp.GdbCompatibleApp):
             source_path=source_path,
         )
 
-    @on(widgets.ListView.Selected,"#backtrace")
-    def _backtrace_selected(self, event: widgets.ListView.Selected) -> None:
-        index = event.list_view.index
+    @on(udbwidgets.UdbListView.ItemSelected, "#backtrace")
+    def _backtrace_selected(self, event: udbwidgets.UdbListView.ItemSelected[int]) -> None:
+        frame_num = event.value.extra
 
         def set_frame():
-            gdbutils.execute_to_string(f"frame {index}")
+            gdbutils.execute_to_string(f"frame {frame_num}")
             self._update_ui()
 
         self.on_gdb_thread(set_frame)
