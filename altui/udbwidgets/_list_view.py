@@ -10,6 +10,8 @@ from textual.app import App, ComposeResult
 from textual.message import Message
 from typing_extensions import Self
 
+from ._table import UdbTable
+
 _T = TypeVar("_T")
 _U = TypeVar("_U")
 
@@ -35,38 +37,13 @@ class UdbListViewCellType(Generic[_T]):
         return self.rendered
 
 
-class UdbListView(widgets.DataTable[UdbListViewCellType[_T]], Generic[_T]):
+class UdbListView(UdbTable[UdbListViewCellType[_T]], Generic[_T]):
     COMPONENT_CLASSES = {
         "rich-list-view--text-primary",
         "rich-list-view--text-secondary",
     }
 
     DEFAULT_CSS = """
-    UdbListView {
-        /* Otherwise it uses as little vertical space as possible. */
-        height: 1fr;
-    }
-
-    UdbListView > .datatable--cursor {
-        background: $primary;
-        color: $text;
-    }
-
-    UdbListView > .datatable--odd-row {
-        background: $surface !important;
-    }
-
-    App.-dark-mode UdbListView > .datatable--even-row {
-        background: $surface-lighten-2 !important;
-    }
-    App.-light-mode UdbListView > .datatable--even-row {
-        background: $surface-darken-2 !important;
-    }
-
-    UdbListView > .datatable--hover {
-        background: $primary 30%;
-    }
-
     App.-dark-mode UdbListView > .rich-list-view--text-primary {
         color: #f0f0f0; /* $text */
     }
@@ -125,6 +102,7 @@ class UdbListView(widgets.DataTable[UdbListViewCellType[_T]], Generic[_T]):
         self._content: list[UdbListViewCellType] = []
 
         super().__init__(
+            cursor_type="cell",
             show_header=False,
             show_row_labels=False,
             zebra_stripes=zebra_stripes,
