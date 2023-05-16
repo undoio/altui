@@ -70,7 +70,7 @@ class UdbApp(gdbapp.GdbCompatibleApp):
     }
 
     .main-window-panel:focus {
-        border: round $accent-lighten-2;
+        border: round $secondary;
     }
 
     Terminal {

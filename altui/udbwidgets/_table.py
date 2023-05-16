@@ -17,18 +17,6 @@ class UdbTable(widgets.DataTable[_T], Generic[_T]):
         height: 1fr;
     }
 
-    App.-dark-mode UdbTable > .datatable--header {
-        background: $background-darken-1;
-    }
-    App.-light-mode UdbTable > .datatable--header {
-        background: $background-darken-3;
-    }
-
-    UdbTable > .datatable--cursor {
-        background: $primary;
-        color: $text;
-    }
-
     UdbTable > .datatable--odd-row {
         background: $surface !important;
     }
