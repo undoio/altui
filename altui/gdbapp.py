@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import os
 import threading
 from typing import Any, Callable, Iterator, TypeVar
 
@@ -14,6 +15,13 @@ from . import gdbsupport, ioutil
 _T = TypeVar("_T")
 
 _app_instance: GdbCompatibleApp | None = None
+
+
+@functools.lru_cache(52)
+def _make_ctrl_from_char(char: str) -> str:
+    char = char.upper()
+    assert len(char) == 1 and ord("A") <= ord(char) <= ord("Z"), f"Invalid char: {char!r}"
+    return chr(ord(char) - ord("A") + 1)
 
 
 # Not an ABC as that doesn't work with App.
@@ -198,3 +206,11 @@ class GdbCompatibleApp(App):
     @classmethod
     def process_output(cls, buff: bytes) -> bool:
         raise NotImplementedError
+
+    def terminal_execute(self, command: str) -> None:
+        home = _make_ctrl_from_char("A")
+        clear_after_cursor = _make_ctrl_from_char("K")
+        os.write(
+            self.configuration.gdb_io_fd,
+            f"{home}{clear_after_cursor}{command}\n".encode("utf-8"),
+        )
