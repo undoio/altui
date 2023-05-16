@@ -1,11 +1,16 @@
 import contextlib
+import dataclasses
+import itertools
+import operator
 import os
 import threading
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 import gdb  # type: ignore[import]
-from src.udbpy import comms, engine  # type: ignore[import]
+import rich.markup
+from rich.text import Text
+from src.udbpy import comms, engine, textutil  # type: ignore[import]
 from src.udbpy.gdb_extensions import gdbutils, udb_base  # type: ignore[import]
 from textual import containers, on, widgets
 from textual.app import ComposeResult
@@ -13,6 +18,16 @@ from textual.app import ComposeResult
 from . import gdbapp, mi, status_bar, terminal, udbwidgets
 
 _T = TypeVar("_T")
+
+
+@dataclasses.dataclass(frozen=True, order=True)
+class _BookmarksCellNameAndCommand:
+    sort_weight: int
+    name: str
+    goto_command: str | None
+
+    def __rich__(self) -> Text:
+        return Text.from_markup(self.name)
 
 
 def _to_type_or_none(type_: Callable[..., _T], value: Any) -> _T | None:
@@ -73,6 +88,11 @@ class UdbApp(gdbapp.GdbCompatibleApp):
     }
     """
 
+    _CURRENT_ITEM_MARKER = "\N{BLACK RIGHT-POINTING TRIANGLE}"
+
+    _BOOKMARKS_NAME_COLUMN = "Name"
+    _BOOKMARKS_TIME_COLUMN = "Time"
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         self._udb: udb_base.Udb = gdb._udb
 
@@ -100,10 +120,14 @@ class UdbApp(gdbapp.GdbCompatibleApp):
                         yield udbwidgets.UdbListView(
                             id="variables", classes="main-window-panel disable-on-execution"
                         )
-                    with widgets.TabPane("Registers", id="registers-tab-pane"):
-                        yield udbwidgets.UdbListView(
-                            id="registers", classes="main-window-panel disable-on-execution"
+                    with widgets.TabPane("Bookmarks", id="bookmarks-tab-pane"):
+                        t: udbwidgets.UdbTable = udbwidgets.UdbTable(
+                            id="bookmarks", classes="main-window-panel disable-on-execution"
                         )
+                        t.add_column("")
+                        t.add_column(self._BOOKMARKS_NAME_COLUMN, key=self._BOOKMARKS_NAME_COLUMN)
+                        t.add_column(self._BOOKMARKS_TIME_COLUMN, key=self._BOOKMARKS_TIME_COLUMN)
+                        yield t
 
         yield status_bar.StatusBar()
 
@@ -177,11 +201,15 @@ class UdbApp(gdbapp.GdbCompatibleApp):
         local_vars = mi.execute("-stack-list-locals 1").get("locals", [])
 
         target_name = None
-        time = None
+        current_time = None
         time_extent = None
+        bookmarks = []
+        time_next_undo = None
+        time_next_redo = None
         with contextlib.suppress(comms.WrongExecutionModeError):
-            time = self._udb.time.get()
+            current_time = self._udb.time.get()
             time_extent = self._udb.get_event_log_extent()
+            bookmarks = list(self._udb.bookmarks.iter_bookmarks())
 
             selected_inferior = self._udb.inferiors.selected
             if selected_inferior.recording is not None:
@@ -191,6 +219,11 @@ class UdbApp(gdbapp.GdbCompatibleApp):
                 if filename is not None:
                     target_name = Path(filename).name
 
+            with contextlib.suppress(StopIteration):
+                time_next_undo = next(self._udb.time.undo_items)
+            with contextlib.suppress(StopIteration):
+                time_next_redo = next(self._udb.time.redo_items)
+
         self.on_ui_thread(
             self._set_ui_to_values,
             stack=stack,
@@ -198,9 +231,12 @@ class UdbApp(gdbapp.GdbCompatibleApp):
             stack_selected_frame_index=stack_selected_frame_index,
             local_vars=local_vars,
             execution_mode=self._udb.get_execution_mode(),
-            time=time,
+            current_time=current_time,
             time_extent=time_extent,
             target_name=target_name,
+            bookmarks=bookmarks,
+            time_next_undo=time_next_undo,
+            time_next_redo=time_next_redo,
         )
 
     def _set_ui_to_values(
@@ -210,9 +246,12 @@ class UdbApp(gdbapp.GdbCompatibleApp):
         stack_selected_frame_index: int | None,
         local_vars: list[dict[str, Any]],
         execution_mode: engine.ExecutionMode,
-        time: engine.Time,
-        time_extent: engine.LogExtent,
+        current_time: engine.Time | None,
+        time_extent: engine.LogExtent | None,
         target_name: str,
+        bookmarks: list[tuple[str, engine.Time]],
+        time_next_undo: engine.Time | None,
+        time_next_redo: engine.Time | None,
     ) -> None:
         def format_var(d: dict[str, Any]) -> str:
             name = d.get("name", "???")
@@ -251,11 +290,73 @@ class UdbApp(gdbapp.GdbCompatibleApp):
             if var.get("name") != "__PRETTY_FUNCTION__":
                 vars_lv.append(format_var(var))
 
+        bookmarks_table = self.query_one("#bookmarks", udbwidgets.UdbTable)
+        bookmarks_table.clear()
+        row_with_current_time = None
+        aligned_times = textutil.align_recording_times(
+            itertools.chain(
+                [current_time, time_next_undo, time_next_redo],
+                map(operator.itemgetter(1), bookmarks),
+            )
+        )
+        current_time_aligned = next(aligned_times)
+        time_next_undo_aligned = next(aligned_times)
+        time_next_redo_aligned = next(aligned_times)
+        for (name, time), time_aligned in zip(bookmarks, aligned_times):
+            row = bookmarks_table.add_row(
+                self._CURRENT_ITEM_MARKER if time == current_time else "",
+                _BookmarksCellNameAndCommand(
+                    0,
+                    rich.markup.escape(name),
+                    f"ugo bookmark {textutil.gdb_command_arg_escape(name)}",
+                ),
+                time_aligned,
+            )
+            if time == current_time and row_with_current_time is None:
+                row_with_current_time = row
+        if current_time is not None and row_with_current_time is None:
+            row_with_current_time = bookmarks_table.add_row(
+                self._CURRENT_ITEM_MARKER,
+                _BookmarksCellNameAndCommand(
+                    0,
+                    "[italic][dim](current time)[/dim][/italic]",
+                    None,
+                ),
+                current_time_aligned,
+            )
+        if time_next_undo is not None:
+            bookmarks_table.add_row(
+                self._CURRENT_ITEM_MARKER if time_next_undo == current_time else "",
+                _BookmarksCellNameAndCommand(
+                    1,
+                    "[italic][dim](undo target)[/dim][/italic]",
+                    "ugo undo",
+                ),
+                time_next_undo_aligned,
+            )
+        if time_next_redo is not None:
+            bookmarks_table.add_row(
+                self._CURRENT_ITEM_MARKER if time_next_redo == current_time else "",
+                _BookmarksCellNameAndCommand(
+                    2,
+                    "[italic][dim](redo target)[/dim][/italic]",
+                    "ugo redo",
+                ),
+                time_next_redo_aligned,
+            )
+        bookmarks_table.sort(self._BOOKMARKS_TIME_COLUMN, self._BOOKMARKS_NAME_COLUMN)
+        if row_with_current_time is not None:
+            # https://github.com/Textualize/textual/issues/2587.
+            row_index = bookmarks_table._row_locations.get(  # pylint: disable=protected-access
+                row_with_current_time
+            )
+            bookmarks_table.move_cursor(row=row_index)
+
         status = self.query_one(status_bar.StatusBar)
         status.update(
             execution_mode=execution_mode,
             target_name=target_name,
-            time=time,
+            time=current_time,
             time_extent=time_extent,
             source_path=source_path,
         )
@@ -269,6 +370,17 @@ class UdbApp(gdbapp.GdbCompatibleApp):
             self._update_ui()
 
         self.on_gdb_thread(set_frame)
+
+    @on(udbwidgets.UdbTable.RowSelected, "#bookmarks")
+    def _bookmark_selected(self, event: udbwidgets.UdbTable.RowSelected) -> None:
+        bookmarks_table = self.query_one("#bookmarks", udbwidgets.UdbTable)
+        cell: _BookmarksCellNameAndCommand = bookmarks_table.get_cell(
+            row_key=event.row_key,
+            # https://github.com/Textualize/textual/issues/2586.
+            column_key=self._BOOKMARKS_NAME_COLUMN,  # type: ignore[arg-type]
+        )
+        if cell.goto_command is not None:
+            self.terminal_execute(cell.goto_command)
 
     def progress_show(self) -> None:
         term = self.query_one("#terminal", terminal.Terminal)
