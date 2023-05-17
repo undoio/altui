@@ -296,7 +296,7 @@ class UdbApp(GdbCompatibleApp):
         bt_lv.move_cursor(row=stack_selected_frame_index)
 
         code = self.query_one("#code", udbwidgets.SourceView)
-        code.path = Path(source_path) if source_path is not None else None
+        code.path = source_path
         code.current_line = source_line
         code.border_title = source_short_path
 
