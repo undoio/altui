@@ -321,13 +321,23 @@ class Terminal(ScrollView, can_focus=True):
             yield _Char.from_pyte_char(pyte_chars[i])
 
     async def on_key(self, event: events.Key) -> None:
-        if self._fd is None:
-            return
-
         event.stop()
         char = _KEY_TO_ANSI.get(event.key) or event.character
         if char is not None:
-            os.write(self._fd, char.encode("utf-8"))
+            self._write(char)
+
+    def on_paste(self, event: events.Paste) -> None:
+        # By stripping newlines that the user may have accidentally included we avoid executing
+        # unwanted commands.
+        self._write(event.text.strip("\r\n"))
+
+    def _write(self, buff: str | bytes) -> None:
+        if self._fd is None:
+            return
+
+        if isinstance(buff, str):
+            buff = buff.encode("utf-8")
+        os.write(self._fd, buff)
 
 
 class TerminalTestApp(App):
