@@ -92,7 +92,9 @@ class SourceView(widgets.TextLog):
             except UnicodeDecodeError:
                 content = new.read_text(encoding="ascii", errors="backslashreplace")
         except FileNotFoundError:
-            self.placeholder = "File not found"
+            self.placeholder = (
+                "File not found (in a future version we may show the assembly code instead)"
+            )
             return
         except OSError as exc:
             self.placeholder = f"Cannot load file: {exc}"
