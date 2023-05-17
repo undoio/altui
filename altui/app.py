@@ -274,6 +274,7 @@ class UdbApp(GdbCompatibleApp):
 
         source_path = None
         source_line = None
+        source_short_path = None
         bt_lv: udbwidgets.UdbListView[int] = self.query_one("#backtrace", udbwidgets.UdbListView)
         bt_lv.clear()
         for i, (frame, frame_args) in enumerate(zip(stack, stack_arguments)):
@@ -287,6 +288,7 @@ class UdbApp(GdbCompatibleApp):
             )
             if i == stack_selected_frame_index:
                 source_path = _to_type_or_none(Path, frame.get("fullname"))
+                source_short_path = frame.get("file")
                 source_line = _to_type_or_none(int, frame.get("line"))
                 for arg in formatted_args:
                     vars_lv.append(arg)
@@ -296,6 +298,7 @@ class UdbApp(GdbCompatibleApp):
         code = self.query_one("#code", udbwidgets.SourceView)
         code.path = Path(source_path) if source_path is not None else None
         code.current_line = source_line
+        code.border_title = source_short_path
 
         for var in local_vars:
             if var.get("name") != "__PRETTY_FUNCTION__":
