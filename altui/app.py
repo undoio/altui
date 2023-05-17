@@ -15,7 +15,8 @@ from src.udbpy.gdb_extensions import gdbutils, udb_base  # type: ignore[import]
 from textual import containers, on, widgets
 from textual.app import ComposeResult
 
-from . import gdbapp, mi, status_bar, terminal, udbwidgets
+from . import mi, status_bar, terminal, udbwidgets
+from .gdbapp import GdbCompatibleApp, fatal_exceptions, gdb_thread_only, ui_thread_only
 
 _T = TypeVar("_T")
 
@@ -40,7 +41,7 @@ def _to_type_or_none(type_: Callable[..., _T], value: Any) -> _T | None:
         return None
 
 
-class UdbApp(gdbapp.GdbCompatibleApp):
+class UdbApp(GdbCompatibleApp):
     BINDINGS = [
         ("ctrl+w", "toggle_dark", "Toggle dark mode"),
         ("ctrl+x", "expand", "Test terminal expansion"),
@@ -98,6 +99,9 @@ class UdbApp(gdbapp.GdbCompatibleApp):
 
         super().__init__(*args, **kwargs)
 
+    # No `@ui_thread_only` as that would require the return value to be optional, which is not
+    # due to `@fatal_exceptions`.
+    @fatal_exceptions
     def compose(self) -> ComposeResult:
         with containers.Horizontal(id="columns"):
             with containers.Vertical(id="column-central"):
@@ -134,6 +138,8 @@ class UdbApp(gdbapp.GdbCompatibleApp):
         with containers.Horizontal(id="progress_panel"):
             yield widgets.ProgressBar(id="progress_indicator", total=100, show_eta=False)
 
+    @ui_thread_only
+    @fatal_exceptions
     def on_ready(self) -> None:
         term = self.query_one("#terminal", terminal.Terminal)
         term.focus()
@@ -166,14 +172,17 @@ class UdbApp(gdbapp.GdbCompatibleApp):
             instance.on_ui_thread(instance._process_output_internal, buff)
             return True
 
+    @ui_thread_only
+    # We cannot rely on logging exception (done by `ui_thread_only` via `log_exceptions`) as, to
+    # log them, we need to go through this function.
+    @fatal_exceptions
     def _process_output_internal(self, buff: bytes) -> None:
-        self._assert_in_ui_thread()
-
         if self._is_ready:
             self.query_one(terminal.Terminal).process_output(
                 buff.decode("utf-8", errors="backslashreplace")
             )
 
+    @ui_thread_only
     def _change_widgets_enablement(self, enabled: bool) -> None:
         for widget in self.query(".disable-on-execution"):  # pylint: disable=not-an-iterable
             widget.disabled = not enabled
@@ -183,6 +192,7 @@ class UdbApp(gdbapp.GdbCompatibleApp):
         # Investigate whether this happens in newer versions of GDB>
         self.on_gdb_thread(self._update_ui_callback)
 
+    @gdb_thread_only
     def _update_ui_callback(self) -> None:
         if self.get_instance() is not self:
             return
@@ -239,6 +249,7 @@ class UdbApp(gdbapp.GdbCompatibleApp):
             time_next_redo=time_next_redo,
         )
 
+    @ui_thread_only
     def _set_ui_to_values(
         self,
         stack: list[dict[str, Any]],
@@ -362,6 +373,7 @@ class UdbApp(gdbapp.GdbCompatibleApp):
         )
 
     @on(udbwidgets.UdbListView.ItemSelected, "#backtrace")
+    @ui_thread_only
     def _backtrace_selected(self, event: udbwidgets.UdbListView.ItemSelected[int]) -> None:
         frame_num = event.value.extra
 
@@ -372,6 +384,7 @@ class UdbApp(gdbapp.GdbCompatibleApp):
         self.on_gdb_thread(set_frame)
 
     @on(udbwidgets.UdbTable.RowSelected, "#bookmarks")
+    @ui_thread_only
     def _bookmark_selected(self, event: udbwidgets.UdbTable.RowSelected) -> None:
         bookmarks_table = self.query_one("#bookmarks", udbwidgets.UdbTable)
         cell: _BookmarksCellNameAndCommand = bookmarks_table.get_cell(
@@ -382,6 +395,7 @@ class UdbApp(gdbapp.GdbCompatibleApp):
         if cell.goto_command is not None:
             self.terminal_execute(cell.goto_command)
 
+    @ui_thread_only
     def progress_show(self) -> None:
         term = self.query_one("#terminal", terminal.Terminal)
         progress_panel = self.query_one("#progress_panel", containers.Horizontal)
@@ -399,14 +413,17 @@ class UdbApp(gdbapp.GdbCompatibleApp):
         )
         self.progress_update(0)
 
+    @ui_thread_only
     def progress_hide(self) -> None:
         progress_panel = self.query_one("#progress_panel", containers.Horizontal)
         progress_panel.styles.display = "none"
 
+    @ui_thread_only
     def progress_update(self, total: int) -> None:
         progress_indicator = self.query_one("#progress_indicator", widgets.ProgressBar)
         progress_indicator.update(progress=total)
 
+    @ui_thread_only
     def _action_expand(self) -> None:
         term = self.query_one("#terminal", terminal.Terminal)
         code = self.query_one("#code", udbwidgets.SourceView)

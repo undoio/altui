@@ -15,6 +15,7 @@ import traceback
 import tty
 import warnings
 from typing import Any, Callable, Iterator
+from typing import NoReturn
 from unittest import mock
 
 from . import ioutil
@@ -118,6 +119,35 @@ class Configuration:
 
             yield
 
+    def handle_fatal_error(
+        self,
+        *,
+        msg: str = "",
+        exc: BaseException | None = None,
+    ) -> NoReturn:
+        if exc is None:
+            exc = sys.exc_info()[1]
+
+        if exc is None:
+            stack=traceback.format_stack()
+            exc_msg = ""
+        else:
+            stack =traceback.format_exception(exc)
+            exc_msg = f": {exc}"
+        stack_msg = "".join(stack).rstrip() + "\n\n"
+
+        if msg:
+            msg = f": {msg}"
+
+        full_msg = f"\n{stack_msg}Fatal error{msg}{exc_msg}\n\n"
+
+        ioutil.reset_tty(self.real_tty_streams.stdout_fd)
+        os.write(
+            self.real_tty_streams.stderr_fd,
+            full_msg.encode("utf-8", errors="backslashreplace"),
+        )
+        os.abort()
+
     def _allow_sigwinch_from_threads(self):
         real_signal = signal.signal
 
@@ -138,18 +168,10 @@ class Configuration:
         def wrapper():
             try:
                 target()
-            except BaseException as exc:
+            except BaseException:
                 # KeyboardInterrupt cannot happen in threads, so we are not accidentally catching
                 # one here.
-                ioutil.reset_tty(self.real_tty_streams.stdout_fd)
-                os.write(
-                    self.real_tty_streams.stderr_fd,
-                    (
-                        f"\n{traceback.format_exc().strip()}\n\n"
-                        f"Fatal error, thread {name!r} terminated with error: {exc}\n"
-                    ).encode("utf-8", errors="backslashreplace"),
-                )
-                os.abort()
+                self.handle_fatal_error(msg=f"thread {name!r} unexpectedly terminated")
 
         return threading.Thread(target=wrapper, name=name)
 

@@ -4,7 +4,8 @@ import contextlib
 import functools
 import os
 import threading
-from typing import Any, Callable, Iterator, TypeVar
+import traceback
+from typing import Any, Callable, Concatenate, Iterator, ParamSpec, TypeVar
 
 import gdb  # type: ignore
 from textual.app import App
@@ -13,6 +14,8 @@ from typing_extensions import Self
 from . import gdbsupport, ioutil
 
 _T = TypeVar("_T")
+_P = ParamSpec("_P")
+_GdbCompatibleAppT = TypeVar("_GdbCompatibleAppT", bound="GdbCompatibleApp")
 
 _app_instance: GdbCompatibleApp | None = None
 
@@ -22,6 +25,77 @@ def _make_ctrl_from_char(char: str) -> str:
     char = char.upper()
     assert len(char) == 1 and ord("A") <= ord(char) <= ord("Z"), f"Invalid char: {char!r}"
     return chr(ord(char) - ord("A") + 1)
+
+
+def log_exceptions(
+    func: Callable[Concatenate[_GdbCompatibleAppT, _P], _T | None]
+) -> Callable[Concatenate[_GdbCompatibleAppT, _P], _T | None]:
+    # Avoid wrapping twice as that seems to break functions called by textual with:
+    #     missing 1 required positional argument: 'self'
+    if getattr(func, "_exceptions_handled_by_wrapper", False):
+        return func
+
+    @functools.wraps(func)
+    def wrapper(self: _GdbCompatibleAppT, *args: _P.args, **kwargs: _P.kwargs) -> _T | None:
+        try:
+            return func(self, *args, **kwargs)
+        except Exception:  # pylint: disable=broad-exception-caught
+            # When productising, consider printing the full stack trace only in tests.
+            tb = traceback.format_exc().rstrip("\n")
+            self.on_gdb_thread(print, tb)
+            return None
+
+    # pylint: disable=protected-access
+    wrapper._exceptions_handled_by_wrapper = True  # type: ignore[attr-defined]
+    return wrapper
+
+
+def fatal_exceptions(
+    func: Callable[Concatenate[_GdbCompatibleAppT, _P], _T]
+) -> Callable[Concatenate[_GdbCompatibleAppT, _P], _T]:
+    # Avoid wrapping twice as that seems to break functions called by textual with:
+    #     missing 1 required positional argument: 'self'
+    if getattr(func, "_exceptions_handled_by_wrapper", False):
+        return func
+
+    @functools.wraps(func)
+    def wrapper(self: _GdbCompatibleAppT, *args: _P.args, **kwargs: _P.kwargs) -> _T:
+        try:
+            return func(self, *args, **kwargs)
+        except Exception:
+            self.configuration.handle_fatal_error(msg="unhandled exception")
+            raise AssertionError("Impossible control flow")  # For pylint's sake.
+
+    # pylint: disable=protected-access
+    wrapper._exceptions_handled_by_wrapper = True  # type: ignore[attr-defined]
+    return wrapper
+
+
+def ui_thread_only(
+    func: Callable[Concatenate[_GdbCompatibleAppT, _P], _T | None]
+) -> Callable[Concatenate[_GdbCompatibleAppT, _P], _T | None]:
+    func = log_exceptions(func)
+
+    @functools.wraps(func)
+    def wrapper(self: _GdbCompatibleAppT, *args: _P.args, **kwargs: _P.kwargs) -> _T | None:
+        self._assert_in_ui_thread(func.__name__)  # pylint: disable=protected-access
+        return func(self, *args, **kwargs)
+
+    return wrapper
+
+
+def gdb_thread_only(
+    func: Callable[Concatenate[_GdbCompatibleAppT, _P], _T]
+) -> Callable[Concatenate[_GdbCompatibleAppT, _P], _T]:
+    @functools.wraps(func)
+    def wrapper(self: _GdbCompatibleAppT, *args: _P.args, **kwargs: _P.kwargs) -> _T:
+        if threading.current_thread() is not threading.main_thread():
+            self.configuration.handle_fatal_error(
+                msg=f"{func.__name__} can only be executed on the main thread"
+            )
+        return func(self, *args, **kwargs)
+
+    return wrapper
 
 
 # Not an ABC as that doesn't work with App.
@@ -76,14 +150,11 @@ class GdbCompatibleApp(App):
             thread.start()
             init_barrier.wait()
 
-    @classmethod
-    def _assert_in_ui_thread(cls) -> None:
-        # FIXME: add a place argument.
-        instance = cls.get_instance()
-        # Pylint doesn't know that instance is an instance of this class.
-        # pylint: disable=protected-access
-        if instance is None or instance._thread is not threading.current_thread():
-            raise gdb.GdbError("Must be called in the UI thread")
+    def _assert_in_ui_thread(self, func_name: str = "this function") -> None:
+        if threading.current_thread() is not self._thread:
+            self.configuration.handle_fatal_error(
+                msg=f"{func_name} can only be executed on the UI thread"
+            )
 
     @classmethod
     def stop(cls) -> None:
@@ -129,6 +200,8 @@ class GdbCompatibleApp(App):
 
         self.configuration.io_thread_ipc_queue.send(gdbsupport.IOThreadMessage.APP_STARTED)
 
+    @ui_thread_only
+    @fatal_exceptions
     def on_ready(self) -> None:
         self._init_exit_stack.close()
 
@@ -138,6 +211,7 @@ class GdbCompatibleApp(App):
         self._is_ready = True
         self._init_barrier.wait()
 
+    @fatal_exceptions
     def exit(self, *args: Any, _use_locked_get_instance: bool = True, **kwargs: Any) -> None:
         exit_stack = contextlib.ExitStack()
         if _use_locked_get_instance:
@@ -155,10 +229,20 @@ class GdbCompatibleApp(App):
                 super().exit(*args, **kwargs)
 
     def on_ui_thread(self, callback: Callable, *args: Any, **kwargs: Any) -> None:
-        self.call_next(callback, *args, **kwargs)
+        self.call_next(log_exceptions(callback), *args, **kwargs)
 
-    def on_ui_thread_wait(self, callback: Callable[..., _T], *args: Any, **kwargs: Any) -> _T:
-        return self.call_from_thread(callback, *args, **kwargs)
+    def on_ui_thread_wait(
+        self,
+        callback: Callable[..., _T],
+        *args: Any,
+        **kwargs: Any,
+    ) -> _T | None:
+        if threading.current_thread() is self._thread:
+            self.configuration.handle_fatal_error(
+                msg=f"on_ui_thread_wait cannot be executed on the UI thread"
+            )
+
+        return self.call_from_thread(log_exceptions(callback), *args, **kwargs)
 
     def on_gdb_thread(self, callback: Callable, *args: Any, **kwargs: Any) -> None:
         if not threading.main_thread().is_alive():
@@ -169,6 +253,7 @@ class GdbCompatibleApp(App):
         if args or kwargs:
             callback = functools.partial(callback, *args, **kwargs)
 
+        # Exceptions raised by the callback are already printed by GDB.
         gdb.post_event(callback)
 
     def connect_event_thread_safe(
@@ -193,6 +278,7 @@ class GdbCompatibleApp(App):
 
         self.on_gdb_thread(real_connect)
 
+    @gdb_thread_only
     def _disconnect_events_now(self) -> None:
         assert threading.current_thread() is threading.main_thread()
 
