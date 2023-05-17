@@ -214,6 +214,7 @@ class UdbApp(GdbCompatibleApp):
             mi.execute("-stack-info-frame").get("frame", {}).get("level", None),
         )
 
+        thread_info = mi.execute("-thread-info")
         local_vars = mi.execute("-stack-list-locals 1").get("locals", [])
 
         target_name = None
@@ -245,6 +246,7 @@ class UdbApp(GdbCompatibleApp):
             stack=stack,
             stack_arguments=stack_arguments,
             stack_selected_frame_index=stack_selected_frame_index,
+            thread_info=thread_info,
             local_vars=local_vars,
             execution_mode=self._udb.get_execution_mode(),
             current_time=current_time,
@@ -261,6 +263,7 @@ class UdbApp(GdbCompatibleApp):
         stack: list[dict[str, Any]],
         stack_arguments: list[dict[str, Any]],
         stack_selected_frame_index: int | None,
+        thread_info: dict[str, Any],
         local_vars: list[dict[str, Any]],
         execution_mode: engine.ExecutionMode,
         current_time: engine.Time | None,
@@ -270,6 +273,8 @@ class UdbApp(GdbCompatibleApp):
         time_next_undo: engine.Time | None,
         time_next_redo: engine.Time | None,
     ) -> None:
+        # pylint: disable=too-many-locals
+
         def format_var(d: dict[str, Any]) -> str:
             name = d.get("name", "???")
             value = d.get("value", "...")
@@ -305,6 +310,28 @@ class UdbApp(GdbCompatibleApp):
         code.path = source_path
         code.current_line = source_line
         code.border_title = source_short_path
+
+        threads_lv: udbwidgets.UdbListView[int | None] = self.query_one(
+            "#threads", udbwidgets.UdbListView
+        )
+        threads_lv.clear()
+        selected_thread_id = _to_type_or_none(int, thread_info.get("current-thread-id", -1))
+        for i, thread in enumerate(thread_info.get("threads", [])):
+            thread_id = _to_type_or_none(int, thread.get("id", None))
+            frame = thread.get("frame", {})
+            file = frame.get("file", "???")
+            line = frame.get("line", "???")
+            func_name = frame.get("func", "???")
+            arg_list = ", ".join(format_var(arg) for arg in frame.get("args", []))
+            thread_id_formatted = f"[{thread_id}] "
+            indent = " " * len(thread_id_formatted)
+            threads_lv.append(
+                f"{thread_id_formatted}{thread.get('target-id', 'Unknown thread details')}",
+                f"{indent}{func_name}({arg_list})\n{indent}{file}, line {line}",
+                extra=thread_id,
+            )
+            if selected_thread_id == thread_id:
+                threads_lv.move_cursor(row=i)
 
         for var in local_vars:
             if var.get("name") != "__PRETTY_FUNCTION__":
@@ -386,11 +413,18 @@ class UdbApp(GdbCompatibleApp):
     def _backtrace_selected(self, event: udbwidgets.UdbListView.ItemSelected[int]) -> None:
         frame_num = event.value.extra
 
-        def set_frame():
+        def set_frame() -> None:
             gdbutils.execute_to_string(f"frame {frame_num}")
             self._update_ui()
 
         self.on_gdb_thread(set_frame)
+
+    @on(udbwidgets.UdbListView.ItemSelected, "#threads")
+    @ui_thread_only
+    def _thread_selected(self, event: udbwidgets.UdbListView.ItemSelected[int | None]) -> None:
+        thread_num = event.value.extra
+        # Cannot use execute_to_string because it still prints something to the terminal.
+        self.terminal_execute(f"thread {thread_num}")
 
     @on(udbwidgets.UdbTable.RowSelected, "#bookmarks")
     @ui_thread_only
