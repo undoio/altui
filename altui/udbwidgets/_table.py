@@ -22,7 +22,7 @@ class UdbTable(widgets.DataTable[_T], Generic[_T]):
     }
 
     App.-dark-mode UdbTable > .datatable--even-row {
-        background: $surface-lighten-1 !important;
+        background: $surface-lighten-2 !important;
     }
     App.-light-mode UdbTable > .datatable--even-row {
         background: $surface-darken-1 !important;
