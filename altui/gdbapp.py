@@ -139,6 +139,7 @@ class GdbCompatibleApp(App):
             self = cls(configuration, thread, init_barrier, *args, **kwargs)
             self.run()
 
+            ioutil.reset_tty(configuration.real_tty_streams.stdout_fd)
             configuration.io_thread_ipc_queue.send(gdbsupport.IOThreadMessage.APP_EXITED)
 
         with cls.locked_get_instance() as instance:

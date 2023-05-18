@@ -57,8 +57,10 @@ def reset_tty(fd: int) -> None:
 
     # Return the terminal to the normal mode.
     tty.setcbreak(fd, termios.TCSANOW)
-    # Make \n imply a \r so printing works as normal in Python.
     mode = termios.tcgetattr(fd)
+    # Repostore canonical mode and echoing of input.
+    mode[tty.LFLAG] |= termios.ECHO | termios.ICANON
+    # Make \n imply a \r so printing works as normal in Python.
     mode[tty.OFLAG] |= termios.OPOST | termios.ONLCR
     termios.tcsetattr(fd, termios.TCSANOW, mode)
 
