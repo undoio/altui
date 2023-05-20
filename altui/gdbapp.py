@@ -71,17 +71,21 @@ def fatal_exceptions(
     return wrapper
 
 
-def ui_thread_only(
-    func: Callable[Concatenate[_GdbCompatibleAppT, _P], _T | None]
-) -> Callable[Concatenate[_GdbCompatibleAppT, _P], _T | None]:
-    func = log_exceptions(func)
-
+def ui_thread_only_without_handling_exceptions(
+    func: Callable[Concatenate[_GdbCompatibleAppT, _P], _T]
+) -> Callable[Concatenate[_GdbCompatibleAppT, _P], _T]:
     @functools.wraps(func)
-    def wrapper(self: _GdbCompatibleAppT, *args: _P.args, **kwargs: _P.kwargs) -> _T | None:
+    def wrapper(self: _GdbCompatibleAppT, *args: _P.args, **kwargs: _P.kwargs) -> _T:
         self._assert_in_ui_thread(func.__name__)  # pylint: disable=protected-access
         return func(self, *args, **kwargs)
 
     return wrapper
+
+
+def ui_thread_only(
+    func: Callable[Concatenate[_GdbCompatibleAppT, _P], _T]
+) -> Callable[Concatenate[_GdbCompatibleAppT, _P], _T | None]:
+    return ui_thread_only_without_handling_exceptions(log_exceptions(func))
 
 
 def gdb_thread_only(

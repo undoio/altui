@@ -17,7 +17,13 @@ from textual import containers, on, widgets
 from textual.app import ComposeResult
 
 from . import mi, status_bar, terminal, udbwidgets
-from .gdbapp import GdbCompatibleApp, fatal_exceptions, gdb_thread_only, ui_thread_only
+from .gdbapp import (
+    GdbCompatibleApp,
+    fatal_exceptions,
+    gdb_thread_only,
+    ui_thread_only,
+    ui_thread_only_without_handling_exceptions,
+)
 
 _T = TypeVar("_T")
 
@@ -100,8 +106,7 @@ class UdbApp(GdbCompatibleApp):
 
         super().__init__(*args, **kwargs)
 
-    # No `@ui_thread_only` as that would require the return value to be optional, which is not
-    # due to `@fatal_exceptions`.
+    @ui_thread_only_without_handling_exceptions
     @fatal_exceptions
     def compose(self) -> ComposeResult:
         @contextlib.contextmanager
