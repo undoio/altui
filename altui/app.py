@@ -5,7 +5,7 @@ import operator
 import os
 import threading
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Iterator, TypeVar
 
 import gdb  # type: ignore[import]
 import rich.markup
@@ -104,28 +104,47 @@ class UdbApp(GdbCompatibleApp):
     # due to `@fatal_exceptions`.
     @fatal_exceptions
     def compose(self) -> ComposeResult:
+        @contextlib.contextmanager
+        def tabs() -> Iterator[None]:
+            with (
+                containers.Vertical(),
+                widgets.TabbedContent(),
+            ):
+                yield
+
+        @contextlib.contextmanager
+        def tab_pane(title: str, base_id: str) -> Iterator[None]:
+            with (
+                widgets.TabPane(title, id=f"{base_id}-tab-pane"),
+                containers.Vertical(
+                    id=f"{base_id}-tab-pane-vertical",
+                    classes="disable-on-execution",
+                ),
+            ):
+                yield
+
         with containers.Horizontal(id="columns"):
             with containers.Vertical(id="column-central"):
                 yield udbwidgets.SourceView(id="code", classes="main-window-panel")
                 yield terminal.Terminal(id="terminal", classes="main-window-panel")
 
             with containers.Vertical(id="column-right"):
-                with containers.Vertical(), widgets.TabbedContent():
-                    with widgets.TabPane("Backtrace", id="backtrace-tab-pane"):
+                with tabs():
+                    with tab_pane("Backtrace", "backtrace"):
                         yield udbwidgets.UdbListView(
                             id="backtrace", classes="main-window-panel disable-on-execution"
                         )
-                    with widgets.TabPane("Threads", id="threads-tab-pane"):
+                    with tab_pane("Threads", "threads"):
                         yield udbwidgets.UdbListView(
                             id="threads", classes="main-window-panel disable-on-execution"
                         )
 
-                with containers.Vertical(), widgets.TabbedContent():
-                    with widgets.TabPane("Variables", id="variables-tab-pane"):
+                with tabs():
+                    with tab_pane("Variables", "variables"):
                         yield udbwidgets.UdbListView(
                             id="variables", classes="main-window-panel disable-on-execution"
                         )
-                    with widgets.TabPane("Bookmarks", id="bookmarks-tab-pane"):
+                    with tab_pane("Bookmarks", "bookmarks"):
                         t: udbwidgets.UdbTable = udbwidgets.UdbTable(
                             id="bookmarks", classes="main-window-panel disable-on-execution"
                         )
