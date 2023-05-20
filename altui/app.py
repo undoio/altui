@@ -94,6 +94,20 @@ class UdbApp(GdbCompatibleApp):
         border: tall $secondary;
         background: $panel;
     }
+
+    .dock-right {
+        dock: right;
+    }
+
+    #continue-last {
+        display: none;
+        height: auto;
+        padding: 0 1;
+    }
+
+    #continue-last UdbToolbar {
+        padding: 1 0 0 0;
+    }
     """
 
     _CURRENT_ITEM_MARKER = "\N{BLACK RIGHT-POINTING TRIANGLE}"
@@ -139,6 +153,7 @@ class UdbApp(GdbCompatibleApp):
                         yield udbwidgets.UdbListView(
                             id="backtrace", classes="main-window-panel disable-on-execution"
                         )
+
                     with tab_pane("Threads", "threads"):
                         yield udbwidgets.UdbListView(
                             id="threads", classes="main-window-panel disable-on-execution"
@@ -146,9 +161,38 @@ class UdbApp(GdbCompatibleApp):
 
                 with tabs():
                     with tab_pane("Variables", "variables"):
-                        yield udbwidgets.UdbListView(
+                        with udbwidgets.UdbToolbar(id="variables-toolbar"):
+                            yield widgets.Button(
+                                "\N{BLACK LEFT-POINTING TRIANGLE} last", id="last-backward"
+                            )
+                            yield widgets.Button(
+                                "\N{BLACK RIGHT-POINTING TRIANGLE}", id="last-forward"
+                            )
+
+                        with containers.Vertical(id="continue-last", classes="main-window-panel"):
+                            yield widgets.Static(id="continue-last-text")
+                            yield widgets.Static(id="continue-last-expression")
+                            with udbwidgets.UdbToolbar():
+                                yield widgets.Button(
+                                    "\N{BLACK LEFT-POINTING TRIANGLE} Backward",
+                                    id="continue-last-backward",
+                                )
+                                # FIXME: Add a Forward label when we have a way of dealing with
+                                # not enough horizontal space.
+                                yield widgets.Button(
+                                    "\N{BLACK RIGHT-POINTING TRIANGLE}",
+                                    id="continue-last-forward",
+                                )
+                                yield widgets.Button(
+                                    "\N{MULTIPLICATION X} Cancel",
+                                    id="continue-last-cancel",
+                                    classes="dock-right",
+                                )
+
+                        yield udbwidgets.UdbListView[str](
                             id="variables", classes="main-window-panel disable-on-execution"
                         )
+
                     with tab_pane("Bookmarks", "bookmarks"):
                         t: udbwidgets.UdbTable = udbwidgets.UdbTable(
                             id="bookmarks", classes="main-window-panel disable-on-execution"
@@ -277,10 +321,11 @@ class UdbApp(GdbCompatibleApp):
             bookmarks=bookmarks,
             time_next_undo=time_next_undo,
             time_next_redo=time_next_redo,
+            last_search=self._udb.last._latest_search,  # pylint: disable=protected-access
         )
 
     @ui_thread_only
-    def _set_ui_to_values(
+    def _set_ui_to_values(  # pylint: disable=too-many-arguments
         self,
         stack: list[dict[str, Any]],
         stack_arguments: list[dict[str, Any]],
@@ -294,6 +339,7 @@ class UdbApp(GdbCompatibleApp):
         bookmarks: list[tuple[str, engine.Time]],
         time_next_undo: engine.Time | None,
         time_next_redo: engine.Time | None,
+        last_search: Any,
     ) -> None:
         # pylint: disable=too-many-locals
 
@@ -302,7 +348,7 @@ class UdbApp(GdbCompatibleApp):
             value = d.get("value", "...")
             return f"{name} = {value}"
 
-        vars_lv = self.query_one("#variables", udbwidgets.UdbListView)
+        vars_lv: udbwidgets.UdbListView[str] = self.query_one("#variables", udbwidgets.UdbListView)
         vars_lv.clear()
 
         source_path = None
@@ -311,7 +357,8 @@ class UdbApp(GdbCompatibleApp):
         bt_lv: udbwidgets.UdbListView[int] = self.query_one("#backtrace", udbwidgets.UdbListView)
         bt_lv.clear()
         for i, (frame, frame_args) in enumerate(zip(stack, stack_arguments)):
-            formatted_args = [format_var(arg) for arg in frame_args.get("args", [])]
+            args = frame_args.get("args", [])
+            formatted_args = [format_var(arg) for arg in args]
             arg_list = ", ".join(formatted_args)
             func_name = frame.get("func", "???")
             bt_lv.append(
@@ -323,8 +370,8 @@ class UdbApp(GdbCompatibleApp):
                 source_path = _to_type_or_none(Path, frame.get("fullname"))
                 source_short_path = frame.get("file")
                 source_line = _to_type_or_none(int, frame.get("line"))
-                for arg in formatted_args:
-                    vars_lv.append(arg)
+                for formatted, arg in zip(formatted_args, args):
+                    vars_lv.append(formatted, extra=arg.get("name"))
 
         bt_lv.move_cursor(row=stack_selected_frame_index)
 
@@ -357,7 +404,29 @@ class UdbApp(GdbCompatibleApp):
 
         for var in local_vars:
             if var.get("name") != "__PRETTY_FUNCTION__":
-                vars_lv.append(format_var(var))
+                vars_lv.append(format_var(var), extra=var.get("name"))
+
+        # If there is any variable than one must be selected.
+        self.query_one("#variables-toolbar", udbwidgets.UdbToolbar).disabled = (
+            vars_lv.row_count == 0
+        )
+
+        if last_search is not None:
+            self.query_one("#continue-last-text", widgets.Static).update(
+                "Continue search for value changes "
+                + ("without re-evaluating:" if last_search.addr_range is not None else "to:")
+            )
+            self.query_one("#continue-last-expression", widgets.Static).update(
+                Text(f"  {last_search.expression}", no_wrap=True, overflow="ellipsis")
+            )
+            for btn_id in "last-backward", "last-forward":
+                if self.query_one(f"#{btn_id}", widgets.Button).has_focus:
+                    self.query_one(f"#continue-{btn_id}", widgets.Button).focus()
+                    break
+
+        self.query_one("#continue-last", containers.Vertical).styles.display = (
+            "block" if last_search is not None else "none"
+        )
 
         bookmarks_table = self.query_one("#bookmarks", udbwidgets.UdbTable)
         bookmarks_table.clear()
@@ -459,6 +528,29 @@ class UdbApp(GdbCompatibleApp):
         )
         if cell.goto_command is not None:
             self.terminal_execute(cell.goto_command)
+
+    @on(widgets.Button.Pressed, "#last-backward")
+    @on(widgets.Button.Pressed, "#last-forward")
+    @on(widgets.Button.Pressed, "#continue-last-backward")
+    @on(widgets.Button.Pressed, "#continue-last-forward")
+    @ui_thread_only
+    def _last_pressed(self, event: widgets.Button.Pressed):
+        cmd = ["last"]
+        if event.button.id is not None and "forward" in event.button.id:
+            cmd.append("-f")
+
+        if event.button.id is not None and "continue" not in event.button.id:
+            table = self.query_one("#variables", udbwidgets.UdbTable)
+            cell = table.get_cell_at(table.cursor_coordinate)
+            cmd.append(cell.extra)
+
+        self.terminal_execute(" ".join(cmd))
+
+    @on(widgets.Button.Pressed, "#continue-last-cancel")
+    @ui_thread_only
+    def _last_cancel_pressed(self, event: widgets.Button.Pressed):
+        self._udb.last._latest_search = None  # pylint: disable=protected-access
+        self.query_one("#continue-last", containers.Vertical).styles.display = "none"
 
     @ui_thread_only
     def progress_show(self) -> None:
