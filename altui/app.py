@@ -9,8 +9,8 @@ from typing import Any, Callable, TypeVar
 
 import gdb  # type: ignore[import]
 import rich.markup
-from rich.text import Text
 from rich.markdown import Markdown
+from rich.text import Text
 from src.udbpy import comms, engine, textutil  # type: ignore[import]
 from src.udbpy.gdb_extensions import gdbutils, udb_base  # type: ignore[import]
 from textual import containers, on, widgets
@@ -151,9 +151,7 @@ class UdbApp(GdbCompatibleApp):
         )
 
         code = self.query_one("#code", udbwidgets.SourceView)
-        code.write(
-            Markdown((Path(__file__).parent / "welcome.md").read_text(encoding="utf-8"))
-        )
+        code.write(Markdown((Path(__file__).parent / "welcome.md").read_text(encoding="utf-8")))
 
         def change_widgets_enablement_gdb_thread(enabled: bool, event: gdb.ThreadEvent) -> None:
             self.on_ui_thread(self._change_widgets_enablement, enabled)
