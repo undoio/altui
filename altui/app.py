@@ -268,6 +268,9 @@ class UdbApp(GdbCompatibleApp):
         if self.get_instance() is not self:
             return
 
+        if gdbutils.is_tui_enabled():
+            gdb.execute("tui disable")
+
         # FIXME: only requests a few frames initially as this could take a while.
         # Also consider if it's possible not updating everything at each prompt.
         stack = mi.execute("-stack-list-frames").get("stack", [])
