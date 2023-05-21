@@ -3,7 +3,6 @@ import dataclasses
 import itertools
 import operator
 import os
-import threading
 from pathlib import Path
 from typing import Any, Callable, Iterator, TypeVar
 
@@ -268,8 +267,6 @@ class UdbApp(GdbCompatibleApp):
     def _update_ui_callback(self) -> None:
         if self.get_instance() is not self:
             return
-
-        assert threading.current_thread() is threading.main_thread()
 
         # FIXME: only requests a few frames initially as this could take a while.
         # Also consider if it's possible not updating everything at each prompt.
