@@ -14,8 +14,7 @@ import threading
 import traceback
 import tty
 import warnings
-from typing import Any, Callable, Iterator
-from typing import NoReturn
+from typing import Any, Callable, Iterator, NoReturn
 from unittest import mock
 
 from . import ioutil
@@ -129,10 +128,10 @@ class Configuration:
             exc = sys.exc_info()[1]
 
         if exc is None:
-            stack=traceback.format_stack()
+            stack = traceback.format_stack()
             exc_msg = ""
         else:
-            stack =traceback.format_exception(exc)
+            stack = traceback.format_exception(exc)
             exc_msg = f": {exc}"
         stack_msg = "".join(stack).rstrip() + "\n\n"
 
