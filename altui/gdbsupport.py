@@ -48,6 +48,8 @@ class UnsupportedError(Exception):
 
 class Configuration:
     def __init__(self) -> None:
+        from src.udbpy import report  # type: ignore[import]
+
         assert (
             "rich" not in sys.modules
         ), "The rich package was imported before setting redirection up"
@@ -57,7 +59,8 @@ class Configuration:
 
         if not ioutil.Streams.standard().all_same_tty:
             raise UnsupportedError("Altui can only run on terminals.")
-        # FIXME: Check MI mode.
+        if report.mi_mode:
+            raise UnsupportedError("Altui cannot run in MI mode.")
         term = os.getenv("TERM")
         if term and not term.startswith(("xterm", "linux", "screen")):
             raise UnsupportedError(f"Altui doesn't support your current terminal: {term!r}")
