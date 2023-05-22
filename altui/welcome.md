@@ -3,7 +3,8 @@ Welcome to altui, an alternative text-based UI for UDB
 
 Altui provides a modern and user-friendly alternative to plain UDB and to TUI mode.
 
-_**Warning: This is an experiment. It's buggy and has limited functionalities.**_
+_**Warning: This is an experiment. It's buggy and has limited features. It may also stop working
+at any point.**_
 
 
 How to use
