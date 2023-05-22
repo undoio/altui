@@ -24,5 +24,8 @@ How to use
 Bugs
 ----
 
-This is a prototype so it's buggy and lots of things are not implemented yet. For comments, bugs and
-questions email [Marco Barisione &lt;mbarisione@undo.io&gt;](mailto:mbarisione@undo.io).
+This is a prototype so it's buggy and lots of things are not implemented yet.
+
+You can report issues on [GitHub issues](https://github.com/undoio/altui/issues). Alternatively,
+feel free to email [Marco Barisione &lt;mbarisione@undo.io&gt;](mailto:mbarisione@undo.io) with
+questions, issues or suggestions.
