@@ -143,19 +143,20 @@ class GdbCompatibleApp(App):
 
             original_tty_attrs = termios.tcgetattr(configuration.real_tty_streams.stdout_fd)
 
-            self = cls(configuration, thread, init_barrier, *args, **kwargs)
-            self.run()
+            try:
+                self = cls(configuration, thread, init_barrier, *args, **kwargs)
+                self.run()
+            finally:
+                if threading.main_thread().is_alive():
+                    termios.tcsetattr(
+                        configuration.real_tty_streams.stdout_fd,
+                        termios.TCSAFLUSH,
+                        original_tty_attrs,
+                    )
+                else:
+                    ioutil.reset_tty(configuration.real_tty_streams.stdout_fd)
 
-            if threading.main_thread().is_alive():
-                termios.tcsetattr(
-                    configuration.real_tty_streams.stdout_fd,
-                    termios.TCSAFLUSH,
-                    original_tty_attrs,
-                )
-            else:
-                ioutil.reset_tty(configuration.real_tty_streams.stdout_fd)
-
-            configuration.io_thread_ipc_queue.send(gdbsupport.IOThreadMessage.APP_EXITED)
+                configuration.io_thread_ipc_queue.send(gdbsupport.IOThreadMessage.APP_EXITED)
 
         with cls.locked_get_instance() as instance:
             if instance is not None:
