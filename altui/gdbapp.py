@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import functools
 import os
+import termios
 import threading
 import traceback
 from typing import Any, Callable, Concatenate, Iterator, ParamSpec, TypeVar
@@ -140,10 +141,20 @@ class GdbCompatibleApp(App):
             # were None.
             assert configuration is not None
 
+            original_tty_attrs = termios.tcgetattr(configuration.real_tty_streams.stdout_fd)
+
             self = cls(configuration, thread, init_barrier, *args, **kwargs)
             self.run()
 
-            ioutil.reset_tty(configuration.real_tty_streams.stdout_fd)
+            if threading.main_thread().is_alive():
+                termios.tcsetattr(
+                    configuration.real_tty_streams.stdout_fd,
+                    termios.TCSAFLUSH,
+                    original_tty_attrs,
+                )
+            else:
+                ioutil.reset_tty(configuration.real_tty_streams.stdout_fd)
+
             configuration.io_thread_ipc_queue.send(gdbsupport.IOThreadMessage.APP_EXITED)
 
         with cls.locked_get_instance() as instance:
