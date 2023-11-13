@@ -28,26 +28,17 @@ def _make_ctrl_from_char(char: str) -> str:
     return chr(ord(char) - ord("A") + 1)
 
 
-def log_exceptions(
-    func: Callable[Concatenate[_GdbCompatibleAppT, _P], _T | None]
-) -> Callable[Concatenate[_GdbCompatibleAppT, _P], _T | None]:
-    # Avoid wrapping twice as that seems to break functions called by textual with:
-    #     missing 1 required positional argument: 'self'
-    if getattr(func, "_exceptions_handled_by_wrapper", False):
-        return func
-
+def log_exceptions(func: Callable[_P, _T | None]) -> Callable[_P, _T | None]:
     @functools.wraps(func)
-    def wrapper(self: _GdbCompatibleAppT, *args: _P.args, **kwargs: _P.kwargs) -> _T | None:
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _T | None:
         try:
-            return func(self, *args, **kwargs)
+            return func(*args, **kwargs)
         except Exception:  # pylint: disable=broad-exception-caught
             # When productising, consider printing the full stack trace only in tests.
             tb = traceback.format_exc().rstrip("\n")
-            self.on_gdb_thread(print, tb)
+            GdbCompatibleApp.on_gdb_thread(print, tb)
             return None
 
-    # pylint: disable=protected-access
-    wrapper._exceptions_handled_by_wrapper = True  # type: ignore[attr-defined]
     return wrapper
 
 
@@ -245,14 +236,19 @@ class GdbCompatibleApp(App):
             with self.configuration.real_tty_streams_as_sys_std():  # FIXME: Needed?
                 super().exit(*args, **kwargs)
 
-    def on_ui_thread(self, callback: Callable, *args: Any, **kwargs: Any) -> None:
+    def on_ui_thread(
+        self,
+        callback: Callable[_P, _T],
+        *args: _P.args,
+        **kwargs: _P.kwargs,
+    ) -> None:
         self.call_next(log_exceptions(callback), *args, **kwargs)
 
     def on_ui_thread_wait(
         self,
-        callback: Callable[..., _T],
-        *args: Any,
-        **kwargs: Any,
+        callback: Callable[_P, _T],
+        *args: _P.args,
+        **kwargs: _P.kwargs,
     ) -> _T | None:
         if threading.current_thread() is self._thread:
             self.configuration.handle_fatal_error(
@@ -261,7 +257,12 @@ class GdbCompatibleApp(App):
 
         return self.call_from_thread(log_exceptions(callback), *args, **kwargs)
 
-    def on_gdb_thread(self, callback: Callable, *args: Any, **kwargs: Any) -> None:
+    @staticmethod
+    def on_gdb_thread(
+        callback: Callable[_P, _T],
+        *args: _P.args,
+        **kwargs: _P.kwargs,
+    ) -> None:
         if not threading.main_thread().is_alive():
             # This avoids crashes if the main thread already exited. We could avoid the same by
             # disconnecting on gdb_exiting but that's not supported by our current bundled GDB.
