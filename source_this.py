@@ -31,7 +31,6 @@ def _configure_altui() -> None:
     missing = [
         package
         for package in (
-            "pygdbmi",
             "pyte",
             "rich",
             "textual",

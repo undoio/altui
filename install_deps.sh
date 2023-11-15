@@ -25,7 +25,6 @@ curl https://bootstrap.pypa.io/get-pip.py > get-pip.py
 "$python_exe" get-pip.py || error "Cannot install pip."
 
 "$python_exe" -m pip install --upgrade --target . \
-    pygdbmi \
     pyte \
     textual==0.26.0 \
     || error "Cannot install dependencies."
