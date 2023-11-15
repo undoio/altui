@@ -62,8 +62,9 @@ class StatusBar(Widget):
         super().__init__(id="status-bar")
 
         self._execution_mode = engine.ExecutionMode.NOT_RUNNING
-        self._target_name: str = ""
+        self._target_name: str | None = None
         self._time: engine.Time | None = None
+        self._time_extent:engine.LogExtent|None=None
         self._source_path: Path | None = None
 
         self._content: Text | None = None
@@ -71,7 +72,7 @@ class StatusBar(Widget):
     def update(
         self,
         execution_mode: engine.ExecutionMode,
-        target_name: str,
+        target_name: str | None,
         time: engine.Time | None,
         time_extent: engine.LogExtent | None,
         source_path: Path | None,

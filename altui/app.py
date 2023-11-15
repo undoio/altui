@@ -1,10 +1,11 @@
 import contextlib
 import dataclasses
+import functools
 import itertools
 import operator
 import os
 from pathlib import Path
-from typing import Any, Callable, Iterator, TypeVar
+from typing import Any, Iterator, TypeVar
 
 import gdb  # type: ignore[import]
 import rich.markup
@@ -15,7 +16,7 @@ from src.udbpy.gdb_extensions import gdbutils, udb_base  # type: ignore[import]
 from textual import containers, on, widgets
 from textual.app import ComposeResult
 
-from . import mi, status_bar, terminal, udbwidgets
+from . import status_bar, terminal, udbwidgets
 from .gdbapp import (
     GdbCompatibleApp,
     fatal_exceptions,
@@ -37,14 +38,156 @@ class _BookmarksCellNameAndCommand:
         return Text.from_markup(self.name)
 
 
-def _to_type_or_none(type_: Callable[..., _T], value: Any) -> _T | None:
-    if value is None:
-        return None
+@dataclasses.dataclass(frozen=True, order=True)
+class Variable:
+    name: str
+    value: str
 
+    # TODO: add more and consider using enumerations.
+    is_argument: bool
+
+    def __str__(self) -> str:
+        return self.to_string(compact=False)
+
+    def to_string(self, *, compact: bool) -> str:
+        space_around_assignement = "" if compact else " "
+        return f"{self.name}{space_around_assignement}={space_around_assignement}{self.value}"
+
+
+@dataclasses.dataclass(frozen=True)
+class SourceLocation:
+    path: Path
+    short_path: Path
+    line: int
+
+    def __str__(self) -> str:
+        return f"{self.path}, line {self.line}"
+
+
+@dataclasses.dataclass(frozen=True)
+class CalledFunction:
+    # TODO: is it always a function? or could this represent fake frames?
+
+    level: int
+    name: str
+    arguments: list[Variable]
+    is_selected: bool
+    source: SourceLocation | None
+
+    def __str__(self) -> str:
+        formatted_args = ", ".join(arg.to_string(compact=True) for arg in self.arguments)
+        return f"{self.name} ({formatted_args})"
+
+    def source_to_string(self) -> str:
+        if self.source is None:
+            return "No source information"
+        return str(self.source)
+
+
+@dataclasses.dataclass(frozen=True)
+class Thread:
+    num: int
+    thread_name: str | None
+    pid: int
+    tid: int
+
+    is_selected: bool
+
+    function: CalledFunction
+
+    @functools.cached_property
+    def name(self) -> str:
+        # Matches what `info thread` shows in the `Target Id` column, minus the "Thread " prefix
+        # which is not useful.
+        name = f"{self.pid}.{self.tid}"
+        if self.thread_name is not None:
+            name = f'{name} "{self.thread_name}"'
+        return name
+
+    # TODO: Consider adding more state, for instance stopped/running/exited.
+
+
+def iter_function_blocks(frame: gdb.Frame) -> Iterator[gdb.Block]:
     try:
-        return type_(value)
-    except (TypeError, ValueError):
-        return None
+        block = frame.block()
+    except RuntimeError:
+        # Instead of returning `None`, GDB raises a "Cannot locate block for frame." `RuntimeError`.
+        block = None
+
+    while block is not None:
+        yield block
+        if block.function is not None:
+            # block is the top-level function block so we don't need to go further.
+            break
+        block = block.superblock
+
+
+def function_variables(frame: gdb.Frame) -> Iterator[Variable]:
+    for block in iter_function_blocks(frame):
+        for gdb_symbol in block:
+            assert gdb_symbol.print_name is not None  # TODO: superfluous?
+            if gdb_symbol.print_name != "__PRETTY_FUNCTION__":
+                value = gdb_symbol.value(frame)
+                assert (
+                    value is not None
+                ), f"None value for {gdb_symbol.print_name!r}"  # TODO: superfluous?
+                yield Variable(
+                    name=gdb_symbol.print_name,
+                    value=str(value),
+                    is_argument=gdb_symbol.is_argument,
+                )
+
+
+def function(frame: gdb.Frame) -> CalledFunction:
+    sal = frame.find_sal()
+    if sal.symtab is not None:
+        source = SourceLocation(
+            path=Path(sal.symtab.fullname()),
+            short_path=Path(sal.symtab.filename),
+            line=sal.line,
+        )
+    else:
+        source = None
+
+    return CalledFunction(
+        level=frame.level(),
+        name=frame.name() or "???",
+        arguments=[s for s in function_variables(frame) if s.is_argument],
+        is_selected=(frame == gdb.selected_frame()),
+        source=source,
+    )
+
+
+def stack() -> Iterator[CalledFunction]:
+    try:
+        gdbutils.ensure_running()
+    except comms.WrongExecutionModeError:
+        return
+
+    frame = gdb.newest_frame()
+    while frame is not None:
+        yield function(frame)
+        frame = frame.older()
+
+
+def threads() -> Iterator[Thread]:
+    selected_gdb_thread = gdb.selected_thread()
+    inf = gdb.selected_inferior()
+    try:
+        for gdb_thread in inf.threads():
+            gdb_thread.switch()
+            pid, tid, _ = gdb_thread.ptid
+            yield Thread(
+                num=gdb_thread.num,
+                thread_name=gdb_thread.name,
+                pid=pid,
+                tid=tid,
+                is_selected=(gdb_thread == selected_gdb_thread),
+                function=function(gdb.selected_frame()),
+            )
+    finally:
+        if selected_gdb_thread is not None:
+            selected_gdb_thread.switch()
 
 
 class UdbApp(GdbCompatibleApp):
@@ -188,7 +331,7 @@ class UdbApp(GdbCompatibleApp):
                                     classes="dock-right",
                                 )
 
-                        yield udbwidgets.UdbListView[str](
+                        yield udbwidgets.UdbListView(
                             id="variables", classes="main-window-panel disable-on-execution"
                         )
 
@@ -259,8 +402,6 @@ class UdbApp(GdbCompatibleApp):
             widget.disabled = not enabled
 
     def _update_ui(self) -> None:
-        # Doing MI commands from this event leads to a GDB crash.
-        # Investigate whether this happens in newer versions of GDB>
         self.on_gdb_thread(self._update_ui_callback)
 
     @gdb_thread_only
@@ -271,29 +412,14 @@ class UdbApp(GdbCompatibleApp):
         if gdbutils.is_tui_enabled():
             gdb.execute("tui disable")
 
-        # FIXME: only requests a few frames initially as this could take a while.
-        # Also consider if it's possible not updating everything at each prompt.
-        stack = mi.execute("-stack-list-frames").get("stack", [])
-        stack_arguments = mi.execute("-stack-list-arguments 1").get("stack-args", [])
-        stack_selected_frame_index = _to_type_or_none(
-            int,
-            mi.execute("-stack-info-frame").get("frame", {}).get("level", None),
-        )
-
-        thread_info = mi.execute("-thread-info")
-        local_vars = mi.execute("-stack-list-locals 1").get("locals", [])
-
         target_name = None
-        current_time = None
+        selected_frame = None
         time_extent = None
+        current_time = None
         bookmarks = []
         time_next_undo = None
         time_next_redo = None
         with contextlib.suppress(comms.WrongExecutionModeError):
-            current_time = self._udb.time.get()
-            time_extent = self._udb.get_event_log_extent()
-            bookmarks = list(self._udb.bookmarks.iter_bookmarks())
-
             selected_inferior = self._udb.inferiors.selected
             if selected_inferior.recording is not None:
                 target_name = selected_inferior.recording.name
@@ -302,6 +428,12 @@ class UdbApp(GdbCompatibleApp):
                 if filename is not None:
                     target_name = Path(filename).name
 
+            selected_frame = gdbutils.selected_frame()
+
+            current_time = self._udb.time.get()
+            time_extent = self._udb.get_event_log_extent()
+            bookmarks = list(self._udb.bookmarks.iter_bookmarks())
+
             with contextlib.suppress(StopIteration):
                 time_next_undo = next(self._udb.time.undo_items)
             with contextlib.suppress(StopIteration):
@@ -309,11 +441,11 @@ class UdbApp(GdbCompatibleApp):
 
         self.on_ui_thread(
             self._set_ui_to_values,
-            stack=stack,
-            stack_arguments=stack_arguments,
-            stack_selected_frame_index=stack_selected_frame_index,
-            thread_info=thread_info,
-            local_vars=local_vars,
+            stack=list(stack()),
+            threads=list(threads()),
+            variables=(
+                sorted(function_variables(selected_frame)) if selected_frame is not None else []
+            ),
             execution_mode=self._udb.get_execution_mode(),
             current_time=current_time,
             time_extent=time_extent,
@@ -324,89 +456,74 @@ class UdbApp(GdbCompatibleApp):
             last_search=self._udb.last._latest_search,  # pylint: disable=protected-access
         )
 
+
     @ui_thread_only
-    def _set_ui_to_values(  # pylint: disable=too-many-arguments
+    def _set_ui_to_values(
         self,
-        stack: list[dict[str, Any]],
-        stack_arguments: list[dict[str, Any]],
-        stack_selected_frame_index: int | None,
-        thread_info: dict[str, Any],
-        local_vars: list[dict[str, Any]],
+        stack: list[CalledFunction],
+        threads: list[Thread],
+        variables: list[Variable],
         execution_mode: engine.ExecutionMode,
         current_time: engine.Time | None,
         time_extent: engine.LogExtent | None,
-        target_name: str,
+        target_name: str | None,
         bookmarks: list[tuple[str, engine.Time]],
         time_next_undo: engine.Time | None,
         time_next_redo: engine.Time | None,
         last_search: Any,
     ) -> None:
-        # pylint: disable=too-many-locals
-
-        def format_var(d: dict[str, Any]) -> str:
-            name = d.get("name", "???")
-            value = d.get("value", "...")
-            return f"{name} = {value}"
-
-        vars_lv: udbwidgets.UdbListView[str] = self.query_one("#variables", udbwidgets.UdbListView)
-        vars_lv.clear()
-
-        source_path = None
-        source_line = None
-        source_short_path = None
-        bt_lv: udbwidgets.UdbListView[int] = self.query_one("#backtrace", udbwidgets.UdbListView)
+        bt_lv: udbwidgets.UdbListView[CalledFunction] = self.query_one(
+            "#backtrace", udbwidgets.UdbListView
+        )
         bt_lv.clear()
-        for i, (frame, frame_args) in enumerate(zip(stack, stack_arguments)):
-            args = frame_args.get("args", [])
-            formatted_args = [format_var(arg) for arg in args]
-            arg_list = ", ".join(formatted_args)
-            func_name = frame.get("func", "???")
-            bt_lv.append(
-                f"{func_name}({arg_list})",
-                f'{frame.get("file", "???")}, line {frame.get("line", "???")}',
-                extra=i,
-            )
-            if i == stack_selected_frame_index:
-                source_path = _to_type_or_none(Path, frame.get("fullname"))
-                source_short_path = frame.get("file")
-                source_line = _to_type_or_none(int, frame.get("line"))
-                for formatted, arg in zip(formatted_args, args):
-                    vars_lv.append(formatted, extra=arg.get("name"))
-
-        bt_lv.move_cursor(row=stack_selected_frame_index)
+        curr_function: CalledFunction | None = None
+        for i, f in enumerate(stack):
+            bt_lv.append(str(f), f.source_to_string(), extra=f)
+            if f.is_selected:
+                assert curr_function is None, (
+                    f"Two functions appear to be the current function: "
+                    f"{curr_function} ({curr_function.source_to_string()}) and "
+                    f"{f} ({f.source_to_string()})"
+                )
+                curr_function = f
+                bt_lv.move_cursor(row=i)
 
         code = self.query_one("#code", udbwidgets.SourceView)
-        code.path = source_path
-        code.current_line = source_line
-        code.border_title = source_short_path
+        source_path = None
+        if curr_function is not None and curr_function.source is not None:
+            code.path = source_path = curr_function.source.path
+            code.current_line = curr_function.source.line
+            code.border_title = str(curr_function.source.short_path)
+        else:
+            code.path = None
+            code.current_line = None
+            code.border_title = None
 
-        threads_lv: udbwidgets.UdbListView[int | None] = self.query_one(
+        threads_lv: udbwidgets.UdbListView[Thread] = self.query_one(
             "#threads", udbwidgets.UdbListView
         )
         threads_lv.clear()
-        selected_thread_id = _to_type_or_none(int, thread_info.get("current-thread-id", -1))
-        for i, thread in enumerate(thread_info.get("threads", [])):
-            thread_id = _to_type_or_none(int, thread.get("id", None))
-            frame = thread.get("frame", {})
-            file = frame.get("file", "???")
-            line = frame.get("line", "???")
-            func_name = frame.get("func", "???")
-            arg_list = ", ".join(format_var(arg) for arg in frame.get("args", []))
-            thread_id_formatted = f"[{thread_id}] "
-            indent = " " * len(thread_id_formatted)
+        for i, thread in enumerate(threads):
+            thread_label = f"[{thread.num}] "
+            indent = " " * len(thread_label)
+            # TODO: is the name correct/useful? If not, consider making one from the PID/TID like
+            # GDB does (`Thread 3088776.3088776`).
             threads_lv.append(
-                f"{thread_id_formatted}{thread.get('target-id', 'Unknown thread details')}",
-                f"{indent}{func_name}({arg_list})\n{indent}{file}, line {line}",
-                extra=thread_id,
+                f"{thread_label}{thread.name or ''}".rstrip(),
+                (f"{indent}{thread.function}\n" f"{indent}{thread.function.source}"),
+                extra=thread,
             )
-            if selected_thread_id == thread_id:
+            if thread.is_selected:
                 threads_lv.move_cursor(row=i)
 
-        for var in local_vars:
-            if var.get("name") != "__PRETTY_FUNCTION__":
-                vars_lv.append(format_var(var), extra=var.get("name"))
+        vars_lv: udbwidgets.UdbListView[Variable] = self.query_one(
+            "#variables", udbwidgets.UdbListView
+        )
+        vars_lv.clear()
+        for v in variables:
+            vars_lv.append(str(v), extra=v)
 
-        # If there is any variable than one must be selected.
+        # If there is any variable then one must be selected.
         self.query_one("#variables-toolbar", udbwidgets.UdbToolbar).disabled = (
             vars_lv.row_count == 0
         )
@@ -501,21 +618,27 @@ class UdbApp(GdbCompatibleApp):
 
     @on(udbwidgets.UdbListView.ItemSelected, "#backtrace")
     @ui_thread_only
-    def _backtrace_selected(self, event: udbwidgets.UdbListView.ItemSelected[int]) -> None:
-        frame_num = event.value.extra
+    def _backtrace_selected(
+        self, event: udbwidgets.UdbListView.ItemSelected[CalledFunction]
+    ) -> None:
+        func = event.value.extra
 
         def set_frame() -> None:
-            gdbutils.execute_to_string(f"frame {frame_num}")
+            assert func is not None  # Guaranteed by the check below, but mypy doesn't know.
+
+            gdbutils.execute_to_string(f"frame {func.level}")
             self._update_ui()
 
-        self.on_gdb_thread(set_frame)
+        if func is not None:
+            self.on_gdb_thread(set_frame)
 
     @on(udbwidgets.UdbListView.ItemSelected, "#threads")
     @ui_thread_only
-    def _thread_selected(self, event: udbwidgets.UdbListView.ItemSelected[int | None]) -> None:
-        thread_num = event.value.extra
-        # Cannot use execute_to_string because it still prints something to the terminal.
-        self.terminal_execute(f"thread {thread_num}")
+    def _thread_selected(self, event: udbwidgets.UdbListView.ItemSelected[Thread]) -> None:
+        thread = event.value.extra
+        if thread is not None:
+            # Cannot use execute_to_string because it still prints something to the terminal.
+            self.terminal_execute(f"thread {thread.num}")
 
     @on(udbwidgets.UdbTable.RowSelected, "#bookmarks")
     @ui_thread_only
@@ -540,9 +663,16 @@ class UdbApp(GdbCompatibleApp):
             cmd.append("-f")
 
         if event.button.id is not None and "continue" not in event.button.id:
-            table = self.query_one("#variables", udbwidgets.UdbTable)
+            table: udbwidgets.UdbListView[Variable] = self.query_one(
+                "#variables",
+                udbwidgets.UdbListView,
+            )
             cell = table.get_cell_at(table.cursor_coordinate)
-            cmd.append(cell.extra)
+            var = cell.extra
+            assert (
+                var is not None
+            ), f"Button {event.button.id!r} is not disabled even if there's no selected variable"
+            cmd.append(var.name)
 
         self.terminal_execute(" ".join(cmd))
 
