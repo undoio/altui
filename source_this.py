@@ -11,12 +11,6 @@ def _configure_altui() -> None:
         print("Only recent versions of UDB are supported, not plain GDB.")
         return
 
-    from src.udbpy import cfg
-
-    if int(cfg.get().build_id_version.split(".")[0]) >= 7:
-        print("UDB 7 and later is not supported by altui.")
-        return
-
     try:
         # _udb is injected in the global scope (where this file must be sourced from) by UDB.
         gdb._udb = _udb  # type: ignore[name-defined]  # pylint: disable=protected-access
