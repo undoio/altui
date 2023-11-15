@@ -398,7 +398,7 @@ class UdbApp(GdbCompatibleApp):
 
     @ui_thread_only
     def _change_widgets_enablement(self, enabled: bool) -> None:
-        for widget in self.query(".disable-on-execution"):  # pylint: disable=not-an-iterable
+        for widget in self.query(".disable-on-execution"):
             widget.disabled = not enabled
 
     def _update_ui(self) -> None:
