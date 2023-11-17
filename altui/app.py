@@ -326,7 +326,7 @@ class UdbApp(GdbCompatibleApp):
                                     id="continue-last-forward",
                                 )
                                 yield widgets.Button(
-                                    "\N{MULTIPLICATION X} Cancel",
+                                    "\N{MULTIPLICATION X} Close",
                                     id="continue-last-cancel",
                                     classes="dock-right",
                                 )
