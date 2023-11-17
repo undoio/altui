@@ -84,6 +84,10 @@ class SourceView(widgets.TextLog):
         self.clear()
 
         if new is None:
+            self.placeholder = (
+                "No source file information "
+                "(in a future version we may show the assembly code instead)"
+            )
             return
 
         try:
