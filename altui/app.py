@@ -1,8 +1,7 @@
 import contextlib
 import dataclasses
 import functools
-import itertools
-import operator
+import math
 import os
 from pathlib import Path
 from typing import Any, Iterator, TypeVar
@@ -28,14 +27,40 @@ from .gdbapp import (
 _T = TypeVar("_T")
 
 
+@dataclasses.dataclass(order=True)
+class _BookmarksCellTime:
+    # Store sepaarately so that start and end can be sorted despite having pc == `None`
+    bbcount: int
+    pc: int | float
+    sort_weight: int
+
+    aligned_time: str | None = None
+
+    def __post_init__(self) -> None:
+        assert isinstance(self.pc, int) or self.pc in (
+            -math.inf,
+            math.inf,
+        ), f"Invalid PC={self.pc!r} ({self=})"
+
+    @functools.cached_property
+    def time(self) -> engine.Time:
+        return engine.Time(
+            self.bbcount,
+            self.pc if isinstance(self.pc, int) else None,
+        )
+
+    def __rich__(self) -> Text:
+        assert self.aligned_time is not None
+        return Text(self.aligned_time)
+
+
 @dataclasses.dataclass(frozen=True, order=True)
 class _BookmarksCellNameAndCommand:
-    sort_weight: int
-    name: str
+    markup_text: str
     goto_command: str | None
 
     def __rich__(self) -> Text:
-        return Text.from_markup(self.name)
+        return Text.from_markup(self.markup_text)
 
 
 @dataclasses.dataclass(frozen=True, order=True)
@@ -547,58 +572,93 @@ class UdbApp(GdbCompatibleApp):
 
         bookmarks_table = self.query_one("#bookmarks", udbwidgets.UdbTable)
         bookmarks_table.clear()
-        row_with_current_time = None
-        aligned_times = textutil.align_recording_times(
-            itertools.chain(
-                [current_time, time_next_undo, time_next_redo],
-                map(operator.itemgetter(1), bookmarks),
+        bookmarks_rows: list[tuple[_BookmarksCellTime, _BookmarksCellNameAndCommand]] = []
+        seen_row_with_current_time = False
+
+        def add_bookmark_row(
+            time: engine.Time | None,
+            markup_text: str,
+            goto_command: str | None,
+            *,
+            sort_weight: int = 0,
+            overwrite_pc: int | float | None = None,
+        ) -> None:
+            if time is None:
+                return
+            bookmarks_rows.append(
+                (
+                    _BookmarksCellTime(
+                        bbcount=time.bbcount,
+                        pc=overwrite_pc if overwrite_pc is not None else time.pc,
+                        sort_weight=sort_weight,
+                    ),
+                    _BookmarksCellNameAndCommand(
+                        markup_text=markup_text,
+                        goto_command=goto_command,
+                    ),
+                )
             )
+
+            if time == current_time:
+                nonlocal seen_row_with_current_time
+                seen_row_with_current_time = True
+
+        for name, time in bookmarks:
+            add_bookmark_row(
+                time,
+                rich.markup.escape(name),
+                f"ugo bookmark {textutil.gdb_command_arg_escape(name)}",
+            )
+
+        add_bookmark_row(
+            time_next_undo,
+            "[italic][dim](undo target)[/dim][/italic]",
+            "ugo undo",
+            sort_weight=1,
         )
-        current_time_aligned = next(aligned_times)
-        time_next_undo_aligned = next(aligned_times)
-        time_next_redo_aligned = next(aligned_times)
-        for (name, time), time_aligned in zip(bookmarks, aligned_times):
+        add_bookmark_row(
+            time_next_redo,
+            "[italic][dim](redo target)[/dim][/italic]",
+            "ugo redo",
+            sort_weight=2,
+        )
+        if time_extent is not None:
+            # Start and end times miss the PC so we cannot usually know if we are at the start or
+            # end. The exception is when we are currently in record mode as we must always be at
+            # the end.
+            add_bookmark_row(
+                engine.Time(time_extent.start),
+                "[italic][dim](start)[/dim][/italic]",
+                "ugo start",
+                sort_weight=-10,
+                overwrite_pc=-math.inf,
+            )
+            at_end = self._udb.get_execution_mode() is engine.ExecutionMode.RECORDING
+            assert current_time is not None
+            add_bookmark_row(
+                    current_time if at_end else engine.Time(time_extent.end),
+                    "[italic][dim](end)[/dim][/italic]",
+                    "ugo end",
+                    sort_weight=10,
+                    overwrite_pc=None if at_end else math.inf,
+                )
+            if at_end:
+                seen_row_with_current_time = True
+        if current_time is not None and not seen_row_with_current_time:
+            add_bookmark_row(current_time, f"[italic][dim](current time)[/dim][/italic]", None)
+
+        aligned_times = textutil.align_recording_times(map(lambda row: row[0].time, bookmarks_rows))
+        row_with_current_time = None
+        for (cell_time, cell_name), aligned_time in zip(bookmarks_rows, aligned_times):
+            cell_time.aligned_time = aligned_time
+            at_current_time = cell_time.time == current_time
             row = bookmarks_table.add_row(
-                self._CURRENT_ITEM_MARKER if time == current_time else "",
-                _BookmarksCellNameAndCommand(
-                    0,
-                    rich.markup.escape(name),
-                    f"ugo bookmark {textutil.gdb_command_arg_escape(name)}",
-                ),
-                time_aligned,
+                self._CURRENT_ITEM_MARKER if at_current_time else "",
+                cell_name,
+                cell_time,
             )
-            if time == current_time and row_with_current_time is None:
+            if at_current_time and row_with_current_time is None:
                 row_with_current_time = row
-        if current_time is not None and row_with_current_time is None:
-            row_with_current_time = bookmarks_table.add_row(
-                self._CURRENT_ITEM_MARKER,
-                _BookmarksCellNameAndCommand(
-                    0,
-                    "[italic][dim](current time)[/dim][/italic]",
-                    None,
-                ),
-                current_time_aligned,
-            )
-        if time_next_undo is not None:
-            bookmarks_table.add_row(
-                self._CURRENT_ITEM_MARKER if time_next_undo == current_time else "",
-                _BookmarksCellNameAndCommand(
-                    1,
-                    "[italic][dim](undo target)[/dim][/italic]",
-                    "ugo undo",
-                ),
-                time_next_undo_aligned,
-            )
-        if time_next_redo is not None:
-            bookmarks_table.add_row(
-                self._CURRENT_ITEM_MARKER if time_next_redo == current_time else "",
-                _BookmarksCellNameAndCommand(
-                    2,
-                    "[italic][dim](redo target)[/dim][/italic]",
-                    "ugo redo",
-                ),
-                time_next_redo_aligned,
-            )
         bookmarks_table.sort(self._BOOKMARKS_TIME_COLUMN, self._BOOKMARKS_NAME_COLUMN)
         if row_with_current_time is not None:
             # https://github.com/Textualize/textual/issues/2587.
