@@ -11,7 +11,7 @@ def _configure_altui() -> None:
         print("Only recent versions of UDB are supported, not plain GDB.")
         return
 
-    from src.udbpy import cfg # type: ignore[import]
+    from src.udbpy import cfg  # type: ignore[import]
 
     if int(cfg.get().build_id_version.split(".")[0]) < 7:
         print("Altui requires UDB 7.0 or later.")
@@ -48,7 +48,9 @@ def _configure_altui() -> None:
     # Set up altui.
     sys.path.append(os.path.dirname(__file__))
 
-    from altui import gdbsupport, ioutil
+    from altui import gdbsupport, ioutil, telemetry_support
+
+    telemetry_support.get(gdb._udb).sourced = True  # pylint: disable=protected-access
 
     original_stderr = os.dup(sys.__stderr__.fileno())
     err_msg = None

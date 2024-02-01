@@ -4,7 +4,7 @@ from typing import Callable
 
 import gdb  # type: ignore[import]
 
-from . import app, gdbsupport
+from . import app, gdbsupport, telemetry_support
 
 
 class _AltuiPrefixCommand(gdb.Command):
@@ -70,17 +70,20 @@ def register(configuration: gdbsupport.Configuration | None, err_msg: str | None
     assert bool(configuration) != bool(err_msg), f"{configuration=}; {err_msg=}"
 
     _AltuiPrefixCommand()
-    _AltuiCommand(
-        "altui enable",
-        configuration,
-        err_msg,
-        app.UdbApp.start,
-    )
-    _AltuiCommand(
-        "altui disable",
-        configuration,
-        err_msg,
-        lambda c: app.UdbApp.stop(),
-    )
+
+    def enable(c: gdbsupport.Configuration) -> None:
+        telemetry_support.get(gdb._udb).enabled = True  # pylint: disable=protected-access
+
+        assert c is configuration
+        app.UdbApp.start(c)
+
+    def disable(c: gdbsupport.Configuration) -> None:
+        telemetry_support.get(gdb._udb).disabled = True  # pylint: disable=protected-access
+
+        assert c is configuration
+        app.UdbApp.stop()
+
+    _AltuiCommand("altui enable", configuration, err_msg, enable)
+    _AltuiCommand("altui disable", configuration, err_msg, disable)
 
     _FakeProgress()
